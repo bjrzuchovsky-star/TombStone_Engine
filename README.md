@@ -93,21 +93,42 @@ src/input/              # Input stubs
 src/net/                # Networking stubs (4-player MMO target later)
 src/physics/            # 2D physics stubs
 src/scene/              # Scene stubs
-src/editor/             # Admin UI (AppFlow, settings, projects, screens; ImGui later)
+src/editor/             # Admin UI (AppFlow, settings, projects, ImGui screens)
+cmake/FetchImGuiDeps.cmake  # FetchContent GLFW + Dear ImGui (admin only)
 apps/admin|client|game/ # Build targets controlled by TS_BUILD_*
 ```
 
-### Admin flow (stub)
+### Admin flow (ImGui)
 
-`ts_admin` drives a console state machine owned by `src/editor/`:
+`ts_admin` opens a GLFW + OpenGL3 window and drives ImGui screens owned by `src/editor/`:
 
-1. **Loading** -- splash stub; auto-advances after a short tick budget  
-2. **Login** -- any non-empty username/password, or `DEV_LOGIN` bypass (`AppFlow::submit_dev_login`); Settings link available  
-3. **ProjectManager** -- scans on-disk projects; actions: Open, New 2D Project, Settings, Logout  
-4. **Settings** -- edit `projects_root`, username, `auto_login_dev`, theme; returns to Login or ProjectManager  
-5. **Editor2D** -- workspace stub panels for 2D projects (3D still "not implemented"); Back returns to ProjectManager  
+1. **Loading** -- splash title + progress bar; auto-advances to Login  
+2. **Login** -- username/password, Login, Dev login, Settings  
+3. **ProjectManager** -- list projects, Open / double-click, New 2D (validated name), Settings, Logout; errors shown in-UI  
+4. **Settings** -- edit `projects_root` (Browse stub), theme, `auto_login_dev`, username; Apply/Save with validation  
+5. **Editor2D** -- Hierarchy / Viewport2D / Inspector stub panels + Back  
 
-Hang real ImGui screens on the `IScreen` hooks under `src/editor/screens/` without changing the flow.
+Namespace: `ts::tombstone::editor`.
+
+
+### Building admin with ImGui
+
+Admin pulls **GLFW 3.4** and **Dear ImGui (docking branch)** via CMake `FetchContent` (`cmake/FetchImGuiDeps.cmake`). Downloaded sources live under the build directory (`build/_deps/...`) and are gitignored — they are **not** committed.
+
+Requirements (in addition to C++20):
+
+- OpenGL development libraries  
+- On Linux: X11 (or Wayland) development packages for GLFW (`libx11-dev`, `libxrandr-dev`, `libxinerama-dev`, `libxcursor-dev`, `libxi-dev`, `libgl1-mesa-dev`)  
+- On Windows/MSVC: a working desktop OpenGL driver (Visual Studio 2019+ recommended)
+
+```bash
+cmake -S . -B build -DTS_BUILD_ADMIN=ON -DTS_BUILD_CLIENT=ON -DTS_BUILD_GAME=ON
+cmake --build build --target ts_admin
+./build/apps/admin/ts_admin          # GUI
+./build/apps/admin/ts_admin --smoke  # headless flow smoke (no window)
+```
+
+Client/Game do **not** fetch or link ImGui/GLFW. Building with `-DTS_BUILD_ADMIN=OFF` skips `src/editor` and the FetchContent deps entirely.
 
 ### Projects & settings (on disk)
 
@@ -133,4 +154,4 @@ Each project is a folder under `projects_root` with a `project.json`:
 
 On first run (empty `projects_root`), Admin seeds one sample 2D project. Changing `projects_root` in Settings reloads the project list from the new folder. Local `TombStoneProjects/` and `TombStoneConfig/` are gitignored.
 
-Configure with CMake 3.20+ and a C++20 toolchain. Toggle `TS_BUILD_ADMIN`, `TS_BUILD_CLIENT`, and `TS_BUILD_GAME` as needed.
+Configure with CMake 3.20+ and a C++20 toolchain. Toggle `TS_BUILD_ADMIN`, `TS_BUILD_CLIENT`, and `TS_BUILD_GAME` as needed. See **Building admin with ImGui** above when enabling Admin.
