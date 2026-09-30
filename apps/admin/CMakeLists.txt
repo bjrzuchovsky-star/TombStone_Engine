@@ -11,6 +11,7 @@ target_link_libraries(ts_admin
     ts_net
     ts_physics
     ts_scene
+    ts_editor
 )
 
 target_compile_features(ts_admin PRIVATE cxx_std_20)

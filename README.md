@@ -93,7 +93,19 @@ src/input/              # Input stubs
 src/net/                # Networking stubs (4-player MMO target later)
 src/physics/            # 2D physics stubs
 src/scene/              # Scene stubs
+src/editor/             # Admin UI flow (AppFlow + screens; ImGui later)
 apps/admin|client|game/ # Build targets controlled by TS_BUILD_*
 ```
+
+### Admin flow (stub)
+
+`ts_admin` drives a console state machine owned by `src/editor/`:
+
+1. **Loading** -- splash stub; auto-advances after a short tick budget  
+2. **Login** -- any non-empty username/password, or `DEV_LOGIN` bypass (`AppFlow::submit_dev_login`)  
+3. **ProjectManager** -- in-memory sample projects (one 2D, one 3D "not implemented")  
+4. **Editor2D** -- workspace stub panels when a 2D project is selected  
+
+Hang real ImGui screens on the `IScreen` hooks under `src/editor/screens/` without changing the flow.
 
 Configure with CMake 3.20+ and a C++20 toolchain. Toggle `TS_BUILD_ADMIN`, `TS_BUILD_CLIENT`, and `TS_BUILD_GAME` as needed.

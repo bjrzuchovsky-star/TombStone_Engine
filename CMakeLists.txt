@@ -16,7 +16,9 @@ add_subdirectory(src/net)
 add_subdirectory(src/physics)
 add_subdirectory(src/scene)
 
+# Editor / Admin UI module (screens + AppFlow). Admin-only for now.
 if(TS_BUILD_ADMIN)
+  add_subdirectory(src/editor)
   add_subdirectory(apps/admin)
 endif()
 
