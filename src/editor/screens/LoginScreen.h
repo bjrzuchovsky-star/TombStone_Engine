@@ -8,7 +8,7 @@ namespace ts {
 namespace tombstone {
 namespace editor {
 
-// Login stub -- no OAuth/backends yet.
+// Login screen -- no OAuth/backends yet.
 // Accepts any non-empty username + password, OR submit_dev_login() which
 // bypasses credential checks (DEV_LOGIN convenience for local Admin work).
 // Settings is reachable from Login via request_settings().
@@ -33,14 +33,20 @@ class LoginScreen final : public IScreen {
   bool settings_requested() const { return settings_requested_; }
 
   const std::string& username() const { return username_; }
+  const std::string& error_message() const { return error_message_; }
 
  private:
+  void draw_ui();
+
   bool authenticated_ = false;
   bool settings_requested_ = false;
   bool auto_login_dev_ = false;
   bool auto_login_attempted_ = false;
   std::string username_;
   std::string last_username_;
+  std::string error_message_;
+  char username_buf_[128]{};
+  char password_buf_[128]{};
 };
 
 }  // namespace editor

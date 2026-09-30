@@ -6,8 +6,8 @@ namespace ts {
 namespace tombstone {
 namespace editor {
 
-// Splash / loading stub. Auto-advances to Login after a short delay.
-// Replace draw path with ImGui splash later; keep on_update timing.
+// Splash / loading screen. Auto-advances to Login after a short delay.
+// Renders an ImGui splash with a progress bar while waiting.
 class LoadingScreen final : public IScreen {
  public:
   AppState state() const override { return AppState::Loading; }
@@ -18,7 +18,7 @@ class LoadingScreen final : public IScreen {
 
  private:
   float elapsed_seconds_ = 0.0f;
-  static constexpr float kMinSplashSeconds = 0.25f;
+  static constexpr float kMinSplashSeconds = 1.25f;
 };
 
 }  // namespace editor
