@@ -1,8 +1,11 @@
 add_library(ts_editor
   AppFlow.cpp
+  settings/Settings.cpp
+  projects/ProjectStore.cpp
   screens/LoadingScreen.cpp
   screens/LoginScreen.cpp
   screens/ProjectManagerScreen.cpp
+  screens/SettingsScreen.cpp
   screens/Editor2DScreen.cpp
 )
 

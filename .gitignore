@@ -60,3 +60,7 @@ CMakeUserPresets.json
 *.log
 *.tmp
 .cache/
+
+# Local Admin editor data (cwd-relative defaults)
+TombStoneProjects/
+TombStoneConfig/

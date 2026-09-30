@@ -10,6 +10,7 @@ enum class AppState {
   Loading,
   Login,
   ProjectManager,
+  Settings,
   Editor2D,
   Quit,
 };
@@ -22,6 +23,8 @@ inline const char* to_string(AppState state) {
       return "Login";
     case AppState::ProjectManager:
       return "ProjectManager";
+    case AppState::Settings:
+      return "Settings";
     case AppState::Editor2D:
       return "Editor2D";
     case AppState::Quit:
