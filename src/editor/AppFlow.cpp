@@ -53,7 +53,10 @@ bool AppFlow::reload_projects() {
   std::string ensure_err;
   if (!SettingsStore::ensure_projects_root(settings_.projects_root,
                                            &ensure_err)) {
-    last_error_ = ensure_err;
+    last_error_ = ensure_err.empty()
+                      ? ("Missing or unusable projects_root: " +
+                         settings_.projects_root)
+                      : ensure_err;
     std::cout << "[AppFlow] projects_root error: " << last_error_ << '\n';
     return false;
   }
@@ -75,6 +78,40 @@ void AppFlow::persist_settings() {
   }
 }
 
+bool AppFlow::try_apply_settings_from_screen() {
+  auto* settings_screen = dynamic_cast<SettingsScreen*>(screen_.get());
+  if (!settings_screen || !settings_screen->apply_requested()) {
+    return false;
+  }
+
+  Settings draft = settings_screen->draft();
+  std::string ensure_err;
+  if (!SettingsStore::ensure_projects_root(draft.projects_root, &ensure_err)) {
+    last_error_ = ensure_err.empty()
+                      ? ("Cannot use projects_root '" + draft.projects_root +
+                         "' (missing or not writable).")
+                      : ensure_err;
+    status_message_ = last_error_;
+    settings_screen->clear_apply_request();
+    settings_screen->set_validation_error(last_error_);
+    std::cout << "[AppFlow] settings apply blocked: " << last_error_ << '\n';
+    return false;
+  }
+
+  settings_ = std::move(draft);
+  persist_settings();
+  if (!reload_projects()) {
+    status_message_ = last_error_;
+    settings_screen->clear_apply_request();
+    settings_screen->set_validation_error(last_error_);
+    return false;
+  }
+
+  status_message_ =
+      "Settings saved; projects reloaded from " + settings_.projects_root;
+  return true;
+}
+
 void AppFlow::tick(float delta_seconds) {
   if (!screen_ || state_ == AppState::Quit) {
     return;
@@ -84,7 +121,6 @@ void AppFlow::tick(float delta_seconds) {
 
   const AppState next = screen_->on_update(delta_seconds);
   if (next != state_) {
-    // Capture settings return / login username before tearing down.
     if (state_ == AppState::Login) {
       if (auto* login = dynamic_cast<LoginScreen*>(screen_.get())) {
         if (next == AppState::Settings) {
@@ -113,25 +149,9 @@ void AppFlow::tick(float delta_seconds) {
       if (auto* settings_screen =
               dynamic_cast<SettingsScreen*>(screen_.get())) {
         if (settings_screen->apply_requested()) {
-          settings_ = settings_screen->draft();
-          std::string ensure_err;
-          if (!SettingsStore::ensure_projects_root(settings_.projects_root,
-                                                   &ensure_err)) {
-            last_error_ = ensure_err;
-            status_message_ = ensure_err;
-            std::cout << "[AppFlow] settings apply blocked: " << ensure_err
-                      << '\n';
-            // Keep previous root if new one is unusable.
-            settings_ = SettingsStore::load();
-          } else {
-            persist_settings();
-            if (!reload_projects()) {
-              status_message_ = last_error_;
-            } else {
-              status_message_ =
-                  "Settings saved; projects reloaded from " +
-                  settings_.projects_root;
-            }
+          // Validate/persist before leaving; stay on Settings on failure.
+          if (!try_apply_settings_from_screen()) {
+            return;
           }
         }
       }
@@ -151,9 +171,6 @@ void AppFlow::handle_pending_screen_actions() {
       const std::string name = pm->pending_new_project_name();
       pm->clear_new_project_request();
       create_new_project_2d(name);
-      // Refresh the screen's project list in place.
-      pm->set_projects(project_store_.projects());
-      pm->set_status_message(status_message_);
     }
   }
 }
@@ -210,8 +227,12 @@ bool AppFlow::create_new_project_2d(const std::string& name) {
   ProjectInfo created;
   if (!project_store_.create_project_2d(name, &created)) {
     last_error_ = project_store_.last_error();
-    status_message_ = last_error_;
+    status_message_.clear();
     std::cout << "[AppFlow] create 2D project failed: " << last_error_ << '\n';
+    if (auto* pm = dynamic_cast<ProjectManagerScreen*>(screen_.get())) {
+      pm->set_error_message(last_error_);
+      pm->set_status_message({});
+    }
     return false;
   }
   status_message_ = "Created 2D project \"" + created.name + "\"";
@@ -221,6 +242,8 @@ bool AppFlow::create_new_project_2d(const std::string& name) {
   if (auto* pm = dynamic_cast<ProjectManagerScreen*>(screen_.get())) {
     pm->set_projects(project_store_.projects());
     pm->set_status_message(status_message_);
+    pm->set_error_message({});
+    pm->highlight_project_by_id(created.id);
   }
   return true;
 }
@@ -245,7 +268,6 @@ bool AppFlow::logout() {
   tick(0.0f);
   return current_state() == AppState::Login;
 }
-
 
 bool AppFlow::settings_set_projects_root(std::string path) {
   auto* settings_screen = dynamic_cast<SettingsScreen*>(screen_.get());
@@ -289,6 +311,9 @@ bool AppFlow::apply_settings_draft() {
     return false;
   }
   settings_screen->request_apply();
+  if (!settings_screen->apply_requested()) {
+    return false;
+  }
   tick(0.0f);
   return current_state() == settings_return_state_;
 }
