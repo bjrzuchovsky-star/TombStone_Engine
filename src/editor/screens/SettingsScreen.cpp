@@ -44,11 +44,13 @@ void SettingsScreen::on_enter() {
   apply_requested_ = false;
   cancel_requested_ = false;
   validation_error_.clear();
+  folder_browser_.close();
   sync_buffers_from_draft();
   std::cout << "[Settings] edit config\n";
 }
 
 void SettingsScreen::on_exit() {
+  folder_browser_.close();
   std::cout << "[Settings] leaving\n";
 }
 
@@ -70,17 +72,15 @@ void SettingsScreen::draw_ui() {
   ImGui::SameLine();
   if (ImGui::Button("Browse...")) {
     validation_error_.clear();
-    ImGui::OpenPopup("BrowseStub");
+    folder_browser_.open(projects_root_buf_);
   }
-  if (ImGui::BeginPopupModal("BrowseStub", nullptr,
-                             ImGuiWindowFlags_AlwaysAutoResize)) {
-    ImGui::TextUnformatted(
-        "Folder browser is not wired yet.\n"
-        "Type a cwd-relative or absolute path in projects_root.");
-    if (ImGui::Button("OK", ImVec2(120, 0))) {
-      ImGui::CloseCurrentPopup();
+
+  if (folder_browser_.draw("Select projects_root folder")) {
+    const std::string picked = folder_browser_.take_result();
+    if (!picked.empty()) {
+      set_projects_root(picked);
+      std::cout << "[Settings] browsed projects_root -> " << picked << '\n';
     }
-    ImGui::EndPopup();
   }
 
   ImGui::InputText("username", username_buf_, sizeof(username_buf_));
@@ -107,6 +107,9 @@ void SettingsScreen::draw_ui() {
   if (ImGui::Button("Cancel", ImVec2(120, 0))) {
     request_cancel();
   }
+
+  ImGui::TextDisabled(
+      "Browse opens an in-app folder picker (works on all platforms).");
 
   ImGui::End();
 }
