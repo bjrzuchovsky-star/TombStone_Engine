@@ -2,6 +2,7 @@
 
 #include "editor/screens/IScreen.h"
 #include "editor/settings/Settings.h"
+#include "editor/ui/FolderBrowser.h"
 
 #include <string>
 
@@ -55,6 +56,7 @@ class SettingsScreen final : public IScreen {
   char projects_root_buf_[512]{};
   char username_buf_[128]{};
   int theme_index_ = 0;  // 0=dark, 1=light
+  FolderBrowser folder_browser_;
 };
 
 }  // namespace editor
