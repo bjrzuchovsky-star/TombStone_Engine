@@ -25,8 +25,15 @@ class ProjectStore {
   // Returns false on hard failures (missing/unwritable root).
   bool refresh();
 
+  // Validate a display name before create. Fills error_out on failure.
+  // Rules: non-empty (after trim), length <= 64, safe folder characters only
+  // (letters, digits, space, dash, underscore, period), no path separators /
+  // reserved Windows chars, and resulting slug must be usable.
+  static bool validate_project_name(const std::string& name,
+                                    std::string* error_out = nullptr);
+
   // Creates <root>/<slug>/project.json for a new 2D project. Refreshes list.
-  // Returns false if name empty, path conflict, or I/O error.
+  // Fails on invalid name or if the slug folder already exists (no auto-rename).
   bool create_project_2d(const std::string& name, ProjectInfo* out = nullptr);
 
   // Marks last_opened on disk and in the in-memory list.
@@ -40,9 +47,11 @@ class ProjectStore {
   static bool write_project_json(const ProjectInfo& project,
                                  std::string* error_out = nullptr);
 
- private:
   static std::string make_slug(const std::string& name);
+
+ private:
   static std::string now_timestamp();
+  static std::string trim_copy(const std::string& s);
   bool seed_sample_2d_if_empty();
 
   std::string projects_root_;

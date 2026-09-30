@@ -34,6 +34,7 @@ class AppFlow {
 
   const Settings& settings() const { return settings_; }
   const std::string& last_error() const { return last_error_; }
+  const std::string& status_message() const { return status_message_; }
 
   // Login helpers (no-ops unless current state is Login).
   bool try_login(const std::string& username, const std::string& password);
@@ -70,6 +71,8 @@ class AppFlow {
   bool reload_projects();
   void persist_settings();
   void handle_pending_screen_actions();
+  // Returns false if apply failed (caller must stay on Settings).
+  bool try_apply_settings_from_screen();
 
   AppState state_ = AppState::Quit;
   AppState settings_return_state_ = AppState::ProjectManager;
