@@ -93,7 +93,7 @@ src/input/              # Input stubs
 src/net/                # Networking stubs (4-player MMO target later)
 src/physics/            # 2D physics stubs
 src/scene/              # Scene stubs
-src/editor/             # Admin UI flow (AppFlow + screens; ImGui later)
+src/editor/             # Admin UI (AppFlow, settings, projects, screens; ImGui later)
 apps/admin|client|game/ # Build targets controlled by TS_BUILD_*
 ```
 
@@ -102,10 +102,35 @@ apps/admin|client|game/ # Build targets controlled by TS_BUILD_*
 `ts_admin` drives a console state machine owned by `src/editor/`:
 
 1. **Loading** -- splash stub; auto-advances after a short tick budget  
-2. **Login** -- any non-empty username/password, or `DEV_LOGIN` bypass (`AppFlow::submit_dev_login`)  
-3. **ProjectManager** -- in-memory sample projects (one 2D, one 3D "not implemented")  
-4. **Editor2D** -- workspace stub panels when a 2D project is selected  
+2. **Login** -- any non-empty username/password, or `DEV_LOGIN` bypass (`AppFlow::submit_dev_login`); Settings link available  
+3. **ProjectManager** -- scans on-disk projects; actions: Open, New 2D Project, Settings, Logout  
+4. **Settings** -- edit `projects_root`, username, `auto_login_dev`, theme; returns to Login or ProjectManager  
+5. **Editor2D** -- workspace stub panels for 2D projects (3D still "not implemented"); Back returns to ProjectManager  
 
 Hang real ImGui screens on the `IScreen` hooks under `src/editor/screens/` without changing the flow.
+
+### Projects & settings (on disk)
+
+Defaults are **cwd-relative** (portable; no machine-absolute paths):
+
+| Path | Purpose |
+|------|---------|
+| `./TombStoneConfig/settings.json` | User settings store |
+| `./TombStoneProjects/` | Default `projects_root` (saves/projects folder) |
+
+`settings.json` fields: `projects_root`, `username` (last-used), `auto_login_dev` (bool), `theme` (`dark`/`light` stub), `last_project_path`.
+
+Each project is a folder under `projects_root` with a `project.json`:
+
+```json
+{
+  "name": "Sample 2D Platformer",
+  "dimension": "2d",
+  "created": "2026-09-30T00:00:00Z",
+  "last_opened": "2026-09-30T00:00:00Z"
+}
+```
+
+On first run (empty `projects_root`), Admin seeds one sample 2D project. Changing `projects_root` in Settings reloads the project list from the new folder. Local `TombStoneProjects/` and `TombStoneConfig/` are gitignored.
 
 Configure with CMake 3.20+ and a C++20 toolchain. Toggle `TS_BUILD_ADMIN`, `TS_BUILD_CLIENT`, and `TS_BUILD_GAME` as needed.
