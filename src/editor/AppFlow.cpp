@@ -4,6 +4,7 @@
 #include "editor/screens/LoadingScreen.h"
 #include "editor/screens/LoginScreen.h"
 #include "editor/screens/ProjectManagerScreen.h"
+#include "editor/screens/SettingsScreen.h"
 
 #include <iostream>
 #include <utility>
@@ -12,19 +13,8 @@ namespace ts {
 namespace tombstone {
 namespace editor {
 
-AppFlow::AppFlow() {
-  // In-memory sample projects for the Admin project manager shell.
-  sample_projects_.push_back(ProjectInfo{
-      .id = "sample-2d-platformer",
-      .name = "Sample 2D Platformer",
-      .kind = ProjectKind::TwoD,
-  });
-  sample_projects_.push_back(ProjectInfo{
-      .id = "sample-3d-prototype",
-      .name = "Sample 3D Prototype",
-      .kind = ProjectKind::ThreeD,
-  });
-}
+AppFlow::AppFlow()
+    : project_store_(SettingsStore::default_projects_root()) {}
 
 AppFlow::~AppFlow() {
   if (screen_) {
@@ -34,8 +24,55 @@ AppFlow::~AppFlow() {
 }
 
 void AppFlow::start() {
+  last_error_.clear();
+  status_message_.clear();
   active_project_.reset();
+
+  std::string load_err;
+  settings_ = SettingsStore::load(&load_err);
+  if (!load_err.empty()) {
+    std::cout << "[AppFlow] settings load warning: " << load_err << '\n';
+  }
+
+  project_store_.set_projects_root(settings_.projects_root);
+  if (!reload_projects()) {
+    status_message_ = last_error_;
+  } else {
+    status_message_ = "Loaded " + std::to_string(project_store_.projects().size()) +
+                      " project(s) from " + settings_.projects_root;
+  }
+
+  // Persist defaults on first run so the config file exists and is discoverable.
+  persist_settings();
+
   transition_to(AppState::Loading);
+}
+
+bool AppFlow::reload_projects() {
+  last_error_.clear();
+  std::string ensure_err;
+  if (!SettingsStore::ensure_projects_root(settings_.projects_root,
+                                           &ensure_err)) {
+    last_error_ = ensure_err;
+    std::cout << "[AppFlow] projects_root error: " << last_error_ << '\n';
+    return false;
+  }
+
+  project_store_.set_projects_root(settings_.projects_root);
+  if (!project_store_.refresh()) {
+    last_error_ = project_store_.last_error();
+    std::cout << "[AppFlow] project scan failed: " << last_error_ << '\n';
+    return false;
+  }
+  return true;
+}
+
+void AppFlow::persist_settings() {
+  std::string err;
+  if (!SettingsStore::save(settings_, &err)) {
+    last_error_ = err;
+    std::cout << "[AppFlow] settings save failed: " << err << '\n';
+  }
 }
 
 void AppFlow::tick(float delta_seconds) {
@@ -43,9 +80,81 @@ void AppFlow::tick(float delta_seconds) {
     return;
   }
 
+  handle_pending_screen_actions();
+
   const AppState next = screen_->on_update(delta_seconds);
   if (next != state_) {
+    // Capture settings return / login username before tearing down.
+    if (state_ == AppState::Login) {
+      if (auto* login = dynamic_cast<LoginScreen*>(screen_.get())) {
+        if (next == AppState::Settings) {
+          settings_return_state_ = AppState::Login;
+        }
+        if (next == AppState::ProjectManager && !login->username().empty()) {
+          settings_.username = login->username();
+          persist_settings();
+        }
+      }
+    } else if (state_ == AppState::ProjectManager) {
+      if (next == AppState::Settings) {
+        settings_return_state_ = AppState::ProjectManager;
+      }
+      if (auto* pm = dynamic_cast<ProjectManagerScreen*>(screen_.get())) {
+        if (next == AppState::Editor2D) {
+          if (const ProjectInfo* selected = pm->selected_project()) {
+            active_project_ = std::make_unique<ProjectInfo>(*selected);
+            project_store_.touch_last_opened(selected->path);
+            settings_.last_project_path = selected->path;
+            persist_settings();
+          }
+        }
+      }
+    } else if (state_ == AppState::Settings) {
+      if (auto* settings_screen =
+              dynamic_cast<SettingsScreen*>(screen_.get())) {
+        if (settings_screen->apply_requested()) {
+          settings_ = settings_screen->draft();
+          std::string ensure_err;
+          if (!SettingsStore::ensure_projects_root(settings_.projects_root,
+                                                   &ensure_err)) {
+            last_error_ = ensure_err;
+            status_message_ = ensure_err;
+            std::cout << "[AppFlow] settings apply blocked: " << ensure_err
+                      << '\n';
+            // Keep previous root if new one is unusable.
+            settings_ = SettingsStore::load();
+          } else {
+            persist_settings();
+            if (!reload_projects()) {
+              status_message_ = last_error_;
+            } else {
+              status_message_ =
+                  "Settings saved; projects reloaded from " +
+                  settings_.projects_root;
+            }
+          }
+        }
+      }
+    } else if (state_ == AppState::Editor2D && next == AppState::ProjectManager) {
+      active_project_.reset();
+      status_message_.clear();
+      reload_projects();
+    }
+
     transition_to(next);
+  }
+}
+
+void AppFlow::handle_pending_screen_actions() {
+  if (auto* pm = dynamic_cast<ProjectManagerScreen*>(screen_.get())) {
+    if (pm->new_project_requested()) {
+      const std::string name = pm->pending_new_project_name();
+      pm->clear_new_project_request();
+      create_new_project_2d(name);
+      // Refresh the screen's project list in place.
+      pm->set_projects(project_store_.projects());
+      pm->set_status_message(status_message_);
+    }
   }
 }
 
@@ -58,7 +167,7 @@ bool AppFlow::try_login(const std::string& username,
   if (!login->try_login(username, password)) {
     return false;
   }
-  tick(0.0f);  // apply pending Login -> ProjectManager transition
+  tick(0.0f);
   return true;
 }
 
@@ -74,6 +183,16 @@ bool AppFlow::submit_dev_login() {
   return true;
 }
 
+bool AppFlow::open_settings_from_login() {
+  auto* login = dynamic_cast<LoginScreen*>(screen_.get());
+  if (!login) {
+    return false;
+  }
+  login->request_settings();
+  tick(0.0f);
+  return current_state() == AppState::Settings;
+}
+
 bool AppFlow::select_project(std::size_t index) {
   auto* pm = dynamic_cast<ProjectManagerScreen*>(screen_.get());
   if (!pm) {
@@ -82,11 +201,113 @@ bool AppFlow::select_project(std::size_t index) {
   if (!pm->select_project(index)) {
     return false;
   }
-  if (const ProjectInfo* selected = pm->selected_project()) {
-    active_project_ = std::make_unique<ProjectInfo>(*selected);
+  tick(0.0f);
+  return current_state() == AppState::Editor2D;
+}
+
+bool AppFlow::create_new_project_2d(const std::string& name) {
+  last_error_.clear();
+  ProjectInfo created;
+  if (!project_store_.create_project_2d(name, &created)) {
+    last_error_ = project_store_.last_error();
+    status_message_ = last_error_;
+    std::cout << "[AppFlow] create 2D project failed: " << last_error_ << '\n';
+    return false;
   }
-  tick(0.0f);  // apply ProjectManager -> Editor2D
+  status_message_ = "Created 2D project \"" + created.name + "\"";
+  std::cout << "[AppFlow] " << status_message_ << " at " << created.path
+            << '\n';
+
+  if (auto* pm = dynamic_cast<ProjectManagerScreen*>(screen_.get())) {
+    pm->set_projects(project_store_.projects());
+    pm->set_status_message(status_message_);
+  }
   return true;
+}
+
+bool AppFlow::open_settings_from_projects() {
+  auto* pm = dynamic_cast<ProjectManagerScreen*>(screen_.get());
+  if (!pm) {
+    return false;
+  }
+  pm->request_settings();
+  tick(0.0f);
+  return current_state() == AppState::Settings;
+}
+
+bool AppFlow::logout() {
+  auto* pm = dynamic_cast<ProjectManagerScreen*>(screen_.get());
+  if (!pm) {
+    return false;
+  }
+  active_project_.reset();
+  pm->request_logout();
+  tick(0.0f);
+  return current_state() == AppState::Login;
+}
+
+
+bool AppFlow::settings_set_projects_root(std::string path) {
+  auto* settings_screen = dynamic_cast<SettingsScreen*>(screen_.get());
+  if (!settings_screen) {
+    return false;
+  }
+  settings_screen->set_projects_root(std::move(path));
+  return true;
+}
+
+bool AppFlow::settings_set_username(std::string username) {
+  auto* settings_screen = dynamic_cast<SettingsScreen*>(screen_.get());
+  if (!settings_screen) {
+    return false;
+  }
+  settings_screen->set_username(std::move(username));
+  return true;
+}
+
+bool AppFlow::settings_set_auto_login_dev(bool enabled) {
+  auto* settings_screen = dynamic_cast<SettingsScreen*>(screen_.get());
+  if (!settings_screen) {
+    return false;
+  }
+  settings_screen->set_auto_login_dev(enabled);
+  return true;
+}
+
+bool AppFlow::settings_set_theme(std::string theme) {
+  auto* settings_screen = dynamic_cast<SettingsScreen*>(screen_.get());
+  if (!settings_screen) {
+    return false;
+  }
+  settings_screen->set_theme(std::move(theme));
+  return true;
+}
+
+bool AppFlow::apply_settings_draft() {
+  auto* settings_screen = dynamic_cast<SettingsScreen*>(screen_.get());
+  if (!settings_screen) {
+    return false;
+  }
+  settings_screen->request_apply();
+  tick(0.0f);
+  return current_state() == settings_return_state_;
+}
+
+bool AppFlow::cancel_settings() {
+  auto* settings_screen = dynamic_cast<SettingsScreen*>(screen_.get());
+  if (!settings_screen) {
+    return false;
+  }
+  settings_screen->request_cancel();
+  tick(0.0f);
+  return current_state() == settings_return_state_;
+}
+
+void AppFlow::request_back_to_projects() {
+  if (auto* editor = dynamic_cast<Editor2DScreen*>(screen_.get())) {
+    editor->request_back_to_projects();
+    tick(0.0f);
+  }
 }
 
 void AppFlow::request_quit() {
@@ -118,14 +339,18 @@ void AppFlow::transition_to(AppState next) {
   }
 }
 
-std::unique_ptr<IScreen> AppFlow::make_screen(AppState state) const {
+std::unique_ptr<IScreen> AppFlow::make_screen(AppState state) {
   switch (state) {
     case AppState::Loading:
       return std::make_unique<LoadingScreen>();
     case AppState::Login:
-      return std::make_unique<LoginScreen>();
+      return std::make_unique<LoginScreen>(settings_.username,
+                                           settings_.auto_login_dev);
     case AppState::ProjectManager:
-      return std::make_unique<ProjectManagerScreen>(sample_projects_);
+      return std::make_unique<ProjectManagerScreen>(
+          project_store_.projects(), settings_.projects_root, status_message_);
+    case AppState::Settings:
+      return std::make_unique<SettingsScreen>(settings_, settings_return_state_);
     case AppState::Editor2D: {
       ProjectInfo project = active_project_
                                 ? *active_project_
