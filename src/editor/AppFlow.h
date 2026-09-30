@@ -30,7 +30,7 @@ class AppFlow {
   bool is_running() const { return state_ != AppState::Quit; }
 
   // Login helpers (no-ops unless current state is Login).
-  bool try_login(const std::string& username, the_password_PLACEHOLDER);
+  bool try_login(const std::string& username, const std::string& password);
   bool submit_dev_login();  // DEV_LOGIN bypass -- see LoginScreen
 
   // ProjectManager helpers (no-ops unless current state is ProjectManager).
