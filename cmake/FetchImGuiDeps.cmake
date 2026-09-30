@@ -8,6 +8,9 @@ set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
+# Prefer X11 on Linux; Wayland needs wayland-scanner at configure time.
+set(GLFW_BUILD_WAYLAND OFF CACHE BOOL "" FORCE)
+set(GLFW_BUILD_X11 ON CACHE BOOL "" FORCE)
 
 FetchContent_Declare(
   glfw
@@ -66,4 +69,4 @@ target_compile_definitions(ts_imgui
 )
 
 # Windows: glfw links the right system libs via its own CMake.
-# Linux: needs X11/Wayland + OpenGL development packages at configure time.
+# Linux: needs X11 + OpenGL development packages at configure time.
