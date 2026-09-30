@@ -64,3 +64,7 @@ CMakeUserPresets.json
 # Local Admin editor data (cwd-relative defaults)
 TombStoneProjects/
 TombStoneConfig/
+
+# FetchContent / dependency downloads (never commit)
+_deps/
+**/_deps/

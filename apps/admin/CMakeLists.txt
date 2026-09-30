@@ -12,6 +12,13 @@ target_link_libraries(ts_admin
     ts_physics
     ts_scene
     ts_editor
+    ts_imgui
 )
 
 target_compile_features(ts_admin PRIVATE cxx_std_20)
+
+# MSVC: enable UTF-8 source and avoid min/max macros interfering with ImGui.
+if(MSVC)
+  target_compile_options(ts_admin PRIVATE /utf-8)
+  target_compile_definitions(ts_admin PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+endif()

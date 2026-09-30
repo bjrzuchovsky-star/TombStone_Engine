@@ -17,7 +17,10 @@ add_subdirectory(src/physics)
 add_subdirectory(src/scene)
 
 # Editor / Admin UI module (screens + AppFlow). Admin-only for now.
+# ImGui + GLFW are fetched only when TS_BUILD_ADMIN is ON so client/game
+# stay free of those dependencies.
 if(TS_BUILD_ADMIN)
+  include(FetchImGuiDeps)
   add_subdirectory(src/editor)
   add_subdirectory(apps/admin)
 endif()

@@ -17,6 +17,7 @@ target_include_directories(ts_editor
 target_link_libraries(ts_editor
   PUBLIC
     ts_core
+    ts_imgui
 )
 
 target_compile_features(ts_editor PUBLIC cxx_std_20)
