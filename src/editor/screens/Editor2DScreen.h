@@ -20,12 +20,14 @@ class Editor2DScreen final : public IScreen {
   AppState on_update(float delta_seconds) override;
 
   void request_quit();
+  void request_back_to_projects();  // return to ProjectManager
 
   const ProjectInfo& project() const { return project_; }
 
  private:
   ProjectInfo project_;
   bool quit_requested_ = false;
+  bool back_requested_ = false;
   bool panels_dumped_ = false;
 };
 
