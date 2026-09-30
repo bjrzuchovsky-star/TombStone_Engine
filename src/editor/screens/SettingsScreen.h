@@ -9,7 +9,7 @@ namespace ts {
 namespace tombstone {
 namespace editor {
 
-// Console stub for editing Settings. Reachable from ProjectManager or Login.
+// ImGui settings editor. Reachable from ProjectManager or Login.
 // Applying a new projects_root asks AppFlow to reload the project list.
 class SettingsScreen final : public IScreen {
  public:
@@ -24,25 +24,37 @@ class SettingsScreen final : public IScreen {
   const Settings& draft() const { return draft_; }
   AppState return_state() const { return return_state_; }
 
-  // Mutators used by AppFlow / future ImGui bindings.
   void set_projects_root(std::string path);
   void set_username(std::string username);
   void set_auto_login_dev(bool enabled);
   void set_theme(std::string theme);
 
   // Marks draft ready to apply and leave (AppFlow persists + reloads).
+  // Performs local validation first; on failure sets validation_error_ and
+  // does not set apply_requested_.
   void request_apply();
-  // Leave without applying draft changes.
   void request_cancel();
 
   bool apply_requested() const { return apply_requested_; }
   bool cancel_requested() const { return cancel_requested_; }
 
+  void clear_apply_request();
+  void set_validation_error(std::string message);
+  const std::string& validation_error() const { return validation_error_; }
+
  private:
+  void draw_ui();
+  void sync_buffers_from_draft();
+  void sync_draft_from_buffers();
+
   Settings draft_;
   AppState return_state_ = AppState::ProjectManager;
   bool apply_requested_ = false;
   bool cancel_requested_ = false;
+  std::string validation_error_;
+  char projects_root_buf_[512]{};
+  char username_buf_[128]{};
+  int theme_index_ = 0;  // 0=dark, 1=light
 };
 
 }  // namespace editor
