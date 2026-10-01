@@ -113,6 +113,12 @@ Namespace: `ts::tombstone::editor`.
 **Editor2D workspace** loads/saves `<project>/scene.json` (entities: id/name, x/y/w/h, rgba tint, layer/z, plus pan/zoom/grid). Opening a 2D project loads scene.json when present, otherwise seeds Camera2D / Player / TileMap and writes an initial scene.json. Hierarchy/Inspector edits autosave; leaving the editor (Back / Quit) also saves. Hierarchy edits and Inspector fields update the viewport immediately. **Settings → Browse...** uses a portable ImGui directory browser (no extra native deps); Apply remains the step that validates/writes `projects_root` and reloads the project list.
 
 
+### UI polish (Admin shell)
+
+Admin uses a central `src/editor/ui/Theme` module (dark professional palette, rounded panels, accent buttons) applied at startup and when Settings → theme changes. Screens share card/panel chrome: Loading + Login branded splash, Project Manager card list with dimension badges / last-opened / delete confirm, Settings grouped sections, and Editor2D with File/Edit/View/Help menus, toolbar (grid/snap placeholder), status-bar HUD (FPS, zoom, selection, project path), and ImGui **Docking** layout for Hierarchy / Viewport2D / Inspector (View menu toggles). Dear ImGui docking + multi-viewport flags are enabled in `apps/admin/main.cpp`.
+
+
+
 ### Building admin with ImGui
 
 Admin pulls **GLFW 3.4** and **Dear ImGui (docking branch)** via CMake `FetchContent` (`cmake/FetchImGuiDeps.cmake`). Downloaded sources live under the build directory (`build/_deps/...`) and are gitignored — they are **not** committed.
