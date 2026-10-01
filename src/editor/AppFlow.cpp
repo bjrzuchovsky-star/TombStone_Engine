@@ -172,6 +172,13 @@ void AppFlow::handle_pending_screen_actions() {
       pm->clear_new_project_request();
       create_new_project_2d(name);
     }
+    if (pm->delete_requested()) {
+      const auto idx = pm->pending_delete_index();
+      pm->clear_delete_request();
+      if (idx.has_value()) {
+        delete_project(*idx);
+      }
+    }
   }
 }
 
