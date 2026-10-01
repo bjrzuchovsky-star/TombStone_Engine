@@ -1,8 +1,11 @@
 #include "editor/screens/LoadingScreen.h"
 
+#include "editor/ui/Theme.h"
+
 #include <imgui.h>
 
 #include <algorithm>
+#include <cstdio>
 #include <iostream>
 
 namespace ts {
@@ -24,36 +27,42 @@ AppState LoadingScreen::on_update(float delta_seconds) {
       std::clamp(elapsed_seconds_ / kMinSplashSeconds, 0.0f, 1.0f);
 
   if (ImGui::GetCurrentContext() != nullptr) {
-  const ImGuiViewport* viewport = ImGui::GetMainViewport();
-  ImGui::SetNextWindowPos(viewport->WorkPos);
-  ImGui::SetNextWindowSize(viewport->WorkSize);
-  ImGui::Begin("##LoadingSplash", nullptr,
-               ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
-                   ImGuiWindowFlags_NoSavedSettings |
-                   ImGuiWindowFlags_NoBringToFrontOnFocus);
+    theme::BeginRoot("##LoadingSplash");
 
-  const ImVec2 avail = ImGui::GetContentRegionAvail();
-  ImGui::Dummy(ImVec2(0.0f, avail.y * 0.32f));
+    const ImVec2 avail = ImGui::GetContentRegionAvail();
+    ImGui::Dummy(ImVec2(0.0f, avail.y * 0.18f));
 
-  const char* title = "TombStone Engine";
-  const ImVec2 title_size = ImGui::CalcTextSize(title);
-  ImGui::SetCursorPosX((avail.x - title_size.x) * 0.5f);
-  ImGui::TextUnformatted(title);
+    const float card_w = std::min(avail.x * 0.55f, 520.0f);
+    const float card_h = 280.0f;
+    ImGui::SetCursorPosX((avail.x - card_w) * 0.5f);
+    theme::BeginCard("##LoadingCard", card_w, card_h);
 
-  ImGui::Spacing();
-  const char* subtitle = "Admin Editor";
-  const ImVec2 sub_size = ImGui::CalcTextSize(subtitle);
-  ImGui::SetCursorPosX((avail.x - sub_size.x) * 0.5f);
-  ImGui::TextDisabled("%s", subtitle);
+    const float inner_w = ImGui::GetContentRegionAvail().x;
+    theme::BrandBlock("TombStone Engine", "Admin Editor", inner_w);
 
-  ImGui::Dummy(ImVec2(0.0f, 24.0f));
-  const float bar_width = std::min(avail.x * 0.5f, 420.0f);
-  ImGui::SetCursorPosX((avail.x - bar_width) * 0.5f);
-  ImGui::ProgressBar(progress, ImVec2(bar_width, 0.0f), "");
-  ImGui::SetCursorPosX((avail.x - bar_width) * 0.5f);
-  ImGui::Text("Loading... %d%%", static_cast<int>(progress * 100.0f));
+    ImGui::Dummy(ImVec2(0.0f, 18.0f));
+    const float bar_w = std::min(inner_w, 380.0f);
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (inner_w - bar_w) * 0.5f);
+    ImGui::PushStyleColor(ImGuiCol_PlotHistogram, theme::Accent());
+    ImGui::ProgressBar(progress, ImVec2(bar_w, 10.0f), "");
+    ImGui::PopStyleColor();
 
-  ImGui::End();
+    ImGui::Dummy(ImVec2(0.0f, 8.0f));
+    char status[64];
+    std::snprintf(status, sizeof(status), "Loading modules... %d%%",
+                  static_cast<int>(progress * 100.0f));
+    const ImVec2 st = ImGui::CalcTextSize(status);
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (inner_w - st.x) * 0.5f);
+    theme::StatusInfo(status);
+
+    ImGui::Dummy(ImVec2(0.0f, 10.0f));
+    const char* hint = "Preparing project store and editor shell";
+    const ImVec2 ht = ImGui::CalcTextSize(hint);
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (inner_w - ht.x) * 0.5f);
+    ImGui::TextDisabled("%s", hint);
+
+    theme::EndCard();
+    theme::EndRoot();
   }
 
   if (elapsed_seconds_ >= kMinSplashSeconds) {
