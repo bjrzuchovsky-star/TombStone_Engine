@@ -1,6 +1,7 @@
 #include "editor/screens/ProjectManagerScreen.h"
 
 #include "editor/projects/ProjectStore.h"
+#include "editor/ui/Theme.h"
 
 #include <imgui.h>
 
@@ -24,6 +25,9 @@ void ProjectManagerScreen::on_enter() {
   open_editor_2d_ = false;
   new_project_requested_ = false;
   pending_new_project_name_.clear();
+  delete_requested_ = false;
+  pending_delete_index_.reset();
+  confirm_delete_open_ = false;
   settings_requested_ = false;
   logout_requested_ = false;
   error_message_.clear();
@@ -42,89 +46,84 @@ void ProjectManagerScreen::on_exit() {
   }
 }
 
-void ProjectManagerScreen::draw_ui() {
-  const ImGuiViewport* viewport = ImGui::GetMainViewport();
-  ImGui::SetNextWindowPos(viewport->WorkPos);
-  ImGui::SetNextWindowSize(viewport->WorkSize);
-  ImGui::Begin("##ProjectManagerRoot", nullptr,
-               ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
-                   ImGuiWindowFlags_NoSavedSettings);
+void ProjectManagerScreen::draw_project_card(std::size_t i) {
+  const ProjectInfo& p = projects_[i];
+  const bool highlight =
+      highlighted_index_.has_value() && *highlighted_index_ == i;
 
-  ImGui::TextUnformatted("Project Manager");
+  ImGui::PushID(static_cast<int>(i));
+  ImGui::PushStyleColor(ImGuiCol_ChildBg,
+                        highlight ? ImVec4(0.16f, 0.24f, 0.38f, 1.0f)
+                                  : theme::PanelBg());
+  ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 8.0f);
+  ImGui::BeginChild("card", ImVec2(0, 78), ImGuiChildFlags_Borders);
+
+  ImGui::BeginGroup();
+  ImGui::TextUnformatted(p.name.c_str());
+  ImGui::SameLine();
+  theme::DimensionBadge(to_string(p.kind));
+  ImGui::TextDisabled("%s", p.path.c_str());
+  if (!p.last_opened.empty()) {
+    ImGui::TextDisabled("Last opened: %s", p.last_opened.c_str());
+  } else if (!p.created.empty()) {
+    ImGui::TextDisabled("Created: %s", p.created.c_str());
+  }
+  ImGui::EndGroup();
+
+  if (ImGui::IsWindowHovered() &&
+      ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+    highlighted_index_ = i;
+    error_message_.clear();
+  }
+  if (ImGui::IsWindowHovered() &&
+      ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+    select_project(i);
+  }
+
+  ImGui::EndChild();
+  ImGui::PopStyleVar();
+  ImGui::PopStyleColor();
+  ImGui::PopID();
+  ImGui::Dummy(ImVec2(0, 4.0f));
+}
+
+void ProjectManagerScreen::draw_ui() {
+  theme::BeginRoot("##ProjectManagerRoot");
+
+  theme::SectionHeader("Project Manager");
   ImGui::TextDisabled("projects_root: %s", projects_root_.c_str());
-  ImGui::Separator();
+  ImGui::Spacing();
 
   if (!status_message_.empty()) {
-    ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.45f, 1.0f), "%s",
-                       status_message_.c_str());
+    theme::StatusSuccess(status_message_.c_str());
   }
   if (!error_message_.empty()) {
-    ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.35f, 1.0f), "%s",
-                       error_message_.c_str());
+    theme::StatusError(error_message_.c_str());
   }
 
-  ImGui::BeginChild("ProjectList", ImVec2(0, -110), ImGuiChildFlags_Borders);
+  ImGui::BeginChild("ProjectList", ImVec2(0, -120), ImGuiChildFlags_Borders);
   if (projects_.empty()) {
-    ImGui::TextDisabled("No projects found. Create a New 2D project below.");
+    ImGui::Dummy(ImVec2(0, 40));
+    const char* empty = "No projects yet";
+    const ImVec2 es = ImGui::CalcTextSize(empty);
+    ImGui::SetCursorPosX((ImGui::GetContentRegionAvail().x - es.x) * 0.5f);
+    ImGui::TextUnformatted(empty);
+    theme::StatusInfo(
+        "Create a New 2D project below to get started. A sample project is "
+        "seeded automatically when the projects folder is empty.");
   } else {
     for (std::size_t i = 0; i < projects_.size(); ++i) {
-      const ProjectInfo& p = projects_[i];
-      const bool highlight =
-          highlighted_index_.has_value() && *highlighted_index_ == i;
-      if (highlight) {
-        ImGui::PushStyleColor(ImGuiCol_Header,
-                              ImVec4(0.2f, 0.45f, 0.75f, 0.7f));
-        ImGui::PushStyleColor(ImGuiCol_HeaderHovered,
-                              ImVec4(0.25f, 0.5f, 0.8f, 0.85f));
-        ImGui::PushStyleColor(ImGuiCol_HeaderActive,
-                              ImVec4(0.3f, 0.55f, 0.85f, 1.0f));
-      }
-
-      char label[256];
-      std::snprintf(label, sizeof(label), "%s  [%s]##proj%zu", p.name.c_str(),
-                    to_string(p.kind), i);
-      const bool selected = highlight;
-      if (ImGui::Selectable(label, selected,
-                            ImGuiSelectableFlags_AllowDoubleClick)) {
-        highlighted_index_ = i;
-        error_message_.clear();
-        if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
-          select_project(i);
-        }
-      }
-
-      if (ImGui::IsItemHovered()) {
-        ImGui::BeginTooltip();
-        ImGui::Text("path: %s", p.path.c_str());
-        if (!p.created.empty()) {
-          ImGui::Text("created: %s", p.created.c_str());
-        }
-        if (!p.last_opened.empty()) {
-          ImGui::Text("last opened: %s", p.last_opened.c_str());
-        }
-        ImGui::TextUnformatted("Double-click to open (2D only).");
-        ImGui::EndTooltip();
-      }
-
-      if (highlight) {
-        ImGui::PopStyleColor(3);
-      }
+      draw_project_card(i);
     }
   }
   ImGui::EndChild();
 
   ImGui::Separator();
-  ImGui::InputText("New 2D name", new_name_buf_, sizeof(new_name_buf_));
-
-  if (ImGui::Button("Open", ImVec2(100, 0))) {
-    if (!highlighted_index_.has_value()) {
-      error_message_ = "Select a project in the list before Open.";
-    } else {
-      select_project(*highlighted_index_);
-    }
-  }
+  ImGui::SetNextItemWidth(280.0f);
+  ImGui::InputTextWithHint("##newname", "New 2D project name", new_name_buf_,
+                           sizeof(new_name_buf_));
   ImGui::SameLine();
-  if (ImGui::Button("New 2D", ImVec2(100, 0))) {
+  if (theme::PrimaryButton("New 2D", ImVec2(100, 0))) {
     std::string validate_err;
     if (!ProjectStore::validate_project_name(new_name_buf_, &validate_err)) {
       error_message_ = validate_err;
@@ -135,15 +134,58 @@ void ProjectManagerScreen::draw_ui() {
     }
   }
   ImGui::SameLine();
-  if (ImGui::Button("Settings", ImVec2(100, 0))) {
+  if (theme::SecondaryButton("Open", ImVec2(90, 0))) {
+    if (!highlighted_index_.has_value()) {
+      error_message_ = "Select a project in the list before Open.";
+    } else {
+      select_project(*highlighted_index_);
+    }
+  }
+  ImGui::SameLine();
+  if (theme::DangerButton("Delete", ImVec2(90, 0))) {
+    if (!highlighted_index_.has_value()) {
+      error_message_ = "Select a project before Delete.";
+    } else {
+      confirm_delete_open_ = true;
+      ImGui::OpenPopup("Confirm Delete");
+    }
+  }
+  ImGui::SameLine();
+  if (theme::SecondaryButton("Settings", ImVec2(100, 0))) {
     request_settings();
   }
   ImGui::SameLine();
-  if (ImGui::Button("Logout", ImVec2(100, 0))) {
+  if (theme::SecondaryButton("Logout", ImVec2(90, 0))) {
     request_logout();
   }
 
-  ImGui::End();
+  if (confirm_delete_open_) {
+    ImGui::OpenPopup("Confirm Delete");
+  }
+  if (ImGui::BeginPopupModal("Confirm Delete", nullptr,
+                             ImGuiWindowFlags_AlwaysAutoResize)) {
+    const char* name = "(none)";
+    if (highlighted_index_.has_value() &&
+        *highlighted_index_ < projects_.size()) {
+      name = projects_[*highlighted_index_].name.c_str();
+    }
+    ImGui::Text("Delete project \"%s\" from disk?", name);
+    ImGui::TextDisabled("This removes the project folder permanently.");
+    ImGui::Spacing();
+    if (theme::DangerButton("Delete", ImVec2(120, 0))) {
+      request_delete_highlighted();
+      confirm_delete_open_ = false;
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if (theme::SecondaryButton("Cancel", ImVec2(120, 0))) {
+      confirm_delete_open_ = false;
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+  }
+
+  theme::EndRoot();
 }
 
 AppState ProjectManagerScreen::on_update(float /*delta_seconds*/) {
@@ -225,6 +267,17 @@ void ProjectManagerScreen::request_new_project_2d(std::string name) {
             << pending_new_project_name_ << "\"\n";
 }
 
+void ProjectManagerScreen::request_delete_highlighted() {
+  if (!highlighted_index_.has_value()) {
+    error_message_ = "Select a project before Delete.";
+    return;
+  }
+  pending_delete_index_ = highlighted_index_;
+  delete_requested_ = true;
+  std::cout << "[ProjectManager] Delete requested index="
+            << *pending_delete_index_ << '\n';
+}
+
 void ProjectManagerScreen::request_settings() {
   settings_requested_ = true;
   std::cout << "[ProjectManager] Settings requested\n";
@@ -238,6 +291,11 @@ void ProjectManagerScreen::request_logout() {
 void ProjectManagerScreen::clear_new_project_request() {
   new_project_requested_ = false;
   pending_new_project_name_.clear();
+}
+
+void ProjectManagerScreen::clear_delete_request() {
+  delete_requested_ = false;
+  pending_delete_index_.reset();
 }
 
 }  // namespace editor
