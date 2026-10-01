@@ -2,6 +2,8 @@
 #include "editor/AppFlow.h"
 #include "editor/AppState.h"
 #include "editor/settings/Settings.h"
+#include "editor/workspace/SceneIO.h"
+#include "editor/workspace/Workspace2D.h"
 
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
@@ -169,9 +171,145 @@ int run_console_smoke() {
   engine.tick(kDt);
   flow.tick(kDt);
 
+  // scene.json should exist after opening Editor2D (load or seed+write).
+  const std::string opened_path =
+      flow.active_project() ? flow.active_project()->path : std::string{};
+  if (opened_path.empty()) {
+    std::cerr << "Expected active project path in Editor2D\n";
+    engine.shutdown();
+    return 1;
+  }
+  const fs::path scene_file =
+      fs::path(opened_path) / "scene.json";
+  if (!fs::exists(scene_file)) {
+    std::cerr << "Expected scene.json after opening Editor2D: " << scene_file
+              << '\n';
+    engine.shutdown();
+    return 1;
+  }
+
+  editor::Workspace2D* ws = flow.editor_workspace();
+  if (!ws) {
+    std::cerr << "Expected editor workspace pointer\n";
+    engine.shutdown();
+    return 1;
+  }
+  const std::size_t before_count = ws->entities().size();
+  const std::uint64_t smoke_id = ws->create_entity("SmokePersist");
+  if (smoke_id == 0) {
+    std::cerr << "Failed to create SmokePersist entity\n";
+    engine.shutdown();
+    return 1;
+  }
+  if (editor::Entity2D* e = ws->find(smoke_id)) {
+    e->x = 321.25f;
+    e->y = 42.5f;
+    e->layer = 7;
+  }
+  if (!flow.editor_save_scene()) {
+    std::cerr << "editor_save_scene failed\n";
+    engine.shutdown();
+    return 1;
+  }
+  if (ws->entities().size() != before_count + 1) {
+    std::cerr << "Expected entity count to grow after create\n";
+    engine.shutdown();
+    return 1;
+  }
+
   flow.request_back_to_projects();
   if (flow.current_state() != AppState::ProjectManager) {
     std::cerr << "Expected ProjectManager after back from Editor2D\n";
+    engine.shutdown();
+    return 1;
+  }
+
+  // Re-open same project and verify hierarchy restored from scene.json.
+  bool reopened = false;
+  for (std::size_t i = 0; i < flow.projects().size(); ++i) {
+    if (flow.projects()[i].path == opened_path) {
+      if (flow.select_project(i)) {
+        reopened = true;
+      }
+      break;
+    }
+  }
+  if (!reopened || flow.current_state() != AppState::Editor2D) {
+    std::cerr << "Failed to reopen project for scene.json roundtrip\n";
+    engine.shutdown();
+    return 1;
+  }
+  editor::Workspace2D* ws2 = flow.editor_workspace();
+  if (!ws2) {
+    std::cerr << "Expected workspace after reopen\n";
+    engine.shutdown();
+    return 1;
+  }
+  const editor::Entity2D* persisted = nullptr;
+  for (const editor::Entity2D& e : ws2->entities()) {
+    if (e.name == "SmokePersist") {
+      persisted = &e;
+      break;
+    }
+  }
+  if (!persisted) {
+    std::cerr << "SmokePersist entity missing after reload from scene.json\n";
+    engine.shutdown();
+    return 1;
+  }
+  if (persisted->x < 321.0f || persisted->x > 321.5f || persisted->layer != 7) {
+    std::cerr << "SmokePersist fields not restored (x=" << persisted->x
+              << " layer=" << persisted->layer << ")\n";
+    engine.shutdown();
+    return 1;
+  }
+  if (ws2->entities().size() != before_count + 1) {
+    std::cerr << "Entity count mismatch after scene.json reload\n";
+    engine.shutdown();
+    return 1;
+  }
+
+  // Direct SceneIO roundtrip without going through GUI again.
+  {
+    editor::Workspace2D direct;
+    direct.reset_defaults();
+    const std::uint64_t id = direct.create_entity("DirectRoundTrip");
+    if (editor::Entity2D* e = direct.find(id)) {
+      e->w = 99.0f;
+      e->color[0] = 0.11f;
+    }
+    const fs::path direct_dir = smoke_root / "_direct_scene_io";
+    fs::create_directories(direct_dir);
+    const std::string direct_path = (direct_dir / "scene.json").string();
+    std::string err;
+    if (!editor::scene_io::save(direct, direct_path, &err)) {
+      std::cerr << "Direct scene_io::save failed: " << err << '\n';
+      engine.shutdown();
+      return 1;
+    }
+    editor::Workspace2D loaded;
+    if (!editor::scene_io::load(loaded, direct_path, &err)) {
+      std::cerr << "Direct scene_io::load failed: " << err << '\n';
+      engine.shutdown();
+      return 1;
+    }
+    bool found = false;
+    for (const editor::Entity2D& e : loaded.entities()) {
+      if (e.name == "DirectRoundTrip" && e.w > 98.5f && e.color[0] < 0.12f) {
+        found = true;
+        break;
+      }
+    }
+    if (!found || loaded.entities().size() != direct.entities().size()) {
+      std::cerr << "Direct SceneIO roundtrip mismatch\n";
+      engine.shutdown();
+      return 1;
+    }
+  }
+
+  flow.request_back_to_projects();
+  if (flow.current_state() != AppState::ProjectManager) {
+    std::cerr << "Expected ProjectManager after second back from Editor2D\n";
     engine.shutdown();
     return 1;
   }
