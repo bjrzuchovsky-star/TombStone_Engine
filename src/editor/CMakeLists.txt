@@ -1,7 +1,9 @@
 add_library(ts_editor
   AppFlow.cpp
+  AppFlow_Delete.cpp
   settings/Settings.cpp
   projects/ProjectStore.cpp
+  projects/ProjectStore_Delete.cpp
   workspace/Workspace2D.cpp
   workspace/SceneIO_Load.cpp
   workspace/SceneIO_Save.cpp
