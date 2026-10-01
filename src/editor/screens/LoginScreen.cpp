@@ -1,5 +1,7 @@
 #include "editor/screens/LoginScreen.h"
 
+#include "editor/ui/Theme.h"
+
 #include <imgui.h>
 
 #include <cstring>
@@ -35,53 +37,58 @@ void LoginScreen::on_exit() {
 }
 
 void LoginScreen::draw_ui() {
-  const ImGuiViewport* viewport = ImGui::GetMainViewport();
-  ImGui::SetNextWindowPos(viewport->WorkPos);
-  ImGui::SetNextWindowSize(viewport->WorkSize);
-  ImGui::Begin("##LoginRoot", nullptr,
-               ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
-                   ImGuiWindowFlags_NoSavedSettings);
+  theme::BeginRoot("##LoginRoot");
 
   const ImVec2 avail = ImGui::GetContentRegionAvail();
-  const float panel_w = 420.0f;
-  const float panel_h = 280.0f;
+  const float panel_w = 460.0f;
+  const float panel_h = 360.0f;
   ImGui::SetCursorPos(ImVec2((avail.x - panel_w) * 0.5f,
                              (avail.y - panel_h) * 0.5f));
-  ImGui::BeginChild("LoginPanel", ImVec2(panel_w, panel_h),
-                    ImGuiChildFlags_Borders);
+  theme::BeginCard("LoginPanel", panel_w, panel_h);
 
-  ImGui::TextUnformatted("TombStone Admin -- Login");
-  ImGui::Separator();
-  ImGui::Spacing();
+  const float inner_w = ImGui::GetContentRegionAvail().x;
+  theme::BrandBlock("TombStone Admin", "Sign in to continue", inner_w);
+  ImGui::Dummy(ImVec2(0, 8.0f));
+  theme::SectionHeader("Credentials");
 
-  ImGui::InputText("Username", username_buf_, sizeof(username_buf_));
-  ImGui::InputText("Password", password_buf_, sizeof(password_buf_),
-                   ImGuiInputTextFlags_Password);
+  ImGui::SetNextItemWidth(-1);
+  ImGui::InputTextWithHint("##user", "Username", username_buf_,
+                           sizeof(username_buf_));
+  ImGui::SetNextItemWidth(-1);
+  ImGui::InputTextWithHint("##pass", "Password", password_buf_,
+                           sizeof(password_buf_),
+                           ImGuiInputTextFlags_Password |
+                               ImGuiInputTextFlags_EnterReturnsTrue);
+  if (ImGui::IsItemDeactivatedAfterEdit() &&
+      ImGui::IsKeyPressed(ImGuiKey_Enter)) {
+    try_login(username_buf_, password_buf_);
+  }
 
   if (!error_message_.empty()) {
     ImGui::Spacing();
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.35f, 0.35f, 1.0f));
-    ImGui::TextWrapped("%s", error_message_.c_str());
-    ImGui::PopStyleColor();
+    theme::StatusError(error_message_.c_str());
   }
 
-  ImGui::Spacing();
-  if (ImGui::Button("Login", ImVec2(120, 0))) {
+  ImGui::Dummy(ImVec2(0, 10.0f));
+  const float btn_w = (inner_w - 16.0f) / 3.0f;
+  if (theme::PrimaryButton("Login", ImVec2(btn_w, 34.0f))) {
     try_login(username_buf_, password_buf_);
   }
   ImGui::SameLine();
-  if (ImGui::Button("Dev login", ImVec2(120, 0))) {
+  if (theme::SecondaryButton("Dev login", ImVec2(btn_w, 34.0f))) {
     submit_dev_login();
   }
   ImGui::SameLine();
-  if (ImGui::Button("Settings", ImVec2(120, 0))) {
+  if (theme::SecondaryButton("Settings", ImVec2(btn_w, 34.0f))) {
     request_settings();
   }
 
-  ImGui::Spacing();
-  ImGui::TextDisabled("Stub auth: any non-empty user/pass, or Dev login.");
-  ImGui::EndChild();
-  ImGui::End();
+  ImGui::Dummy(ImVec2(0, 12.0f));
+  theme::StatusInfo(
+      "Stub auth: any non-empty user/pass, or use Dev login for local work.");
+
+  theme::EndCard();
+  theme::EndRoot();
 }
 
 AppState LoginScreen::on_update(float /*delta_seconds*/) {

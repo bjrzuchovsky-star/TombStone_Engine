@@ -12,7 +12,7 @@ namespace tombstone {
 namespace editor {
 
 // On-disk project list/select shell with ImGui UI.
-// Actions: Open (select index / double-click), New 2D Project, Settings, Logout.
+// Actions: Open (select index / double-click), New 2D Project, Delete, Settings, Logout.
 // Selecting a 2D project opens Editor2D; 3D reports a clear error.
 class ProjectManagerScreen final : public IScreen {
  public:
@@ -43,6 +43,7 @@ class ProjectManagerScreen final : public IScreen {
   }
 
   void request_new_project_2d(std::string name = "New 2D Project");
+  void request_delete_highlighted();
   void request_settings();
   void request_logout();
 
@@ -50,14 +51,20 @@ class ProjectManagerScreen final : public IScreen {
   const std::string& pending_new_project_name() const {
     return pending_new_project_name_;
   }
+  bool delete_requested() const { return delete_requested_; }
+  std::optional<std::size_t> pending_delete_index() const {
+    return pending_delete_index_;
+  }
   bool settings_requested() const { return settings_requested_; }
   bool logout_requested() const { return logout_requested_; }
 
-  // Called by AppFlow after it handles new-project creation.
+  // Called by AppFlow after it handles new-project / delete.
   void clear_new_project_request();
+  void clear_delete_request();
 
  private:
   void draw_ui();
+  void draw_project_card(std::size_t index);
 
   std::vector<ProjectInfo> projects_;
   std::string projects_root_;
@@ -68,6 +75,9 @@ class ProjectManagerScreen final : public IScreen {
   bool open_editor_2d_ = false;
   bool new_project_requested_ = false;
   std::string pending_new_project_name_;
+  bool delete_requested_ = false;
+  std::optional<std::size_t> pending_delete_index_;
+  bool confirm_delete_open_ = false;
   bool settings_requested_ = false;
   bool logout_requested_ = false;
   char new_name_buf_[128]{};
