@@ -13,6 +13,7 @@ add_library(ts_editor
   screens/SettingsScreen.cpp
   screens/Editor2DScreen.cpp
   screens/Editor2DScreen_Panels.cpp
+  screens/Editor2DScreen_Shell.cpp
   screens/Editor2DScreen_Viewport.cpp
 )
 

@@ -1,5 +1,7 @@
 #include "editor/screens/Editor2DScreen.h"
 
+#include "editor/ui/Theme.h"
+
 #include <imgui.h>
 
 #include <cstdint>
@@ -13,12 +15,12 @@ namespace tombstone {
 namespace editor {
 
 void Editor2DScreen::draw_hierarchy() {
-  ImGui::TextUnformatted("Scene Hierarchy");
+  theme::SectionHeader("Hierarchy");
   ImGui::TextDisabled("%zu entit%s", workspace_.entities().size(),
                       workspace_.entities().size() == 1 ? "y" : "ies");
   ImGui::Separator();
 
-  if (ImGui::Button("Create", ImVec2(70, 0))) {
+  if (theme::PrimaryButton("Create", ImVec2(70, 0))) {
     cancel_rename();
     workspace_.create_entity("Entity");
     mark_dirty_and_autosave();
@@ -28,13 +30,13 @@ void Editor2DScreen::draw_hierarchy() {
   if (!has_sel) {
     ImGui::BeginDisabled();
   }
-  if (ImGui::Button("Rename", ImVec2(70, 0))) {
+  if (theme::SecondaryButton("Rename", ImVec2(70, 0))) {
     if (const Entity2D* e = workspace_.selected()) {
       begin_rename(e->id);
     }
   }
   ImGui::SameLine();
-  if (ImGui::Button("Delete", ImVec2(70, 0))) {
+  if (theme::DangerButton("Delete", ImVec2(70, 0))) {
     if (const Entity2D* e = workspace_.selected()) {
       const std::uint64_t id = e->id;
       cancel_rename();
@@ -49,7 +51,6 @@ void Editor2DScreen::draw_hierarchy() {
 
   ImGui::Separator();
 
-  // Root scene node (non-selectable container).
   ImGui::SetNextItemOpen(true, ImGuiCond_Once);
   if (ImGui::TreeNodeEx("Scene##root",
                         ImGuiTreeNodeFlags_DefaultOpen |
@@ -110,7 +111,7 @@ void Editor2DScreen::draw_hierarchy() {
 }
 
 void Editor2DScreen::draw_inspector() {
-  ImGui::TextUnformatted("Inspector");
+  theme::SectionHeader("Inspector");
   ImGui::Separator();
 
   Entity2D* e = workspace_.selected();
@@ -174,96 +175,11 @@ void Editor2DScreen::draw_inspector() {
 
   ImGui::Spacing();
   ImGui::Separator();
-  if (ImGui::Button("Back to Projects", ImVec2(-1, 0))) {
+  if (theme::SecondaryButton("Back to Projects", ImVec2(-1, 0))) {
     request_back_to_projects();
   }
 }
 
-void Editor2DScreen::draw_ui() {
-  if (ImGui::BeginMainMenuBar()) {
-    if (ImGui::BeginMenu("File")) {
-      if (ImGui::MenuItem("Save Scene", "Ctrl+S")) {
-        std::string err;
-        if (!save_scene(&err) && !err.empty()) {
-          std::cout << "[Editor2D] save failed: " << err << '\n';
-        }
-      }
-      if (ImGui::MenuItem("Back to Projects")) {
-        request_back_to_projects();
-      }
-      if (ImGui::MenuItem("Quit")) {
-        request_quit();
-      }
-      ImGui::EndMenu();
-    }
-    if (ImGui::BeginMenu("Edit")) {
-      if (ImGui::MenuItem("Create Entity")) {
-        workspace_.create_entity("Entity");
-        mark_dirty_and_autosave();
-      }
-      const bool has_sel = workspace_.selected() != nullptr;
-      if (ImGui::MenuItem("Delete Selected", nullptr, false, has_sel)) {
-        if (const Entity2D* e = workspace_.selected()) {
-          if (workspace_.delete_entity(e->id)) {
-            mark_dirty_and_autosave();
-          }
-        }
-      }
-      if (ImGui::MenuItem("Reset Scene Placeholders")) {
-        workspace_.reset_defaults();
-        mark_dirty_and_autosave();
-      }
-      ImGui::EndMenu();
-    }
-    if (ImGui::BeginMenu("View")) {
-      bool grid = workspace_.show_grid();
-      if (ImGui::MenuItem("Show Grid", nullptr, grid)) {
-        workspace_.set_show_grid(!grid);
-        mark_dirty_and_autosave();
-      }
-      if (ImGui::MenuItem("Reset Camera")) {
-        workspace_.set_pan(0.0f, 0.0f);
-        workspace_.set_zoom(1.0f);
-      }
-      ImGui::EndMenu();
-    }
-    ImGui::TextDisabled("  |  %s (%s)", project_.name.c_str(),
-                        to_string(project_.kind));
-    ImGui::EndMainMenuBar();
-  }
-
-  const ImGuiViewport* viewport = ImGui::GetMainViewport();
-  const ImVec2 work_pos = viewport->WorkPos;
-  const ImVec2 work_size = viewport->WorkSize;
-
-  const float left_w = work_size.x * 0.22f;
-  const float right_w = work_size.x * 0.28f;
-  const float center_w = work_size.x - left_w - right_w;
-
-  ImGui::SetNextWindowPos(work_pos);
-  ImGui::SetNextWindowSize(ImVec2(left_w, work_size.y));
-  ImGui::Begin("Hierarchy", nullptr,
-               ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
-                   ImGuiWindowFlags_NoMove);
-  draw_hierarchy();
-  ImGui::End();
-
-  ImGui::SetNextWindowPos(ImVec2(work_pos.x + left_w, work_pos.y));
-  ImGui::SetNextWindowSize(ImVec2(center_w, work_size.y));
-  ImGui::Begin("Viewport2D", nullptr,
-               ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
-                   ImGuiWindowFlags_NoMove);
-  draw_viewport();
-  ImGui::End();
-
-  ImGui::SetNextWindowPos(ImVec2(work_pos.x + left_w + center_w, work_pos.y));
-  ImGui::SetNextWindowSize(ImVec2(right_w, work_size.y));
-  ImGui::Begin("Inspector", nullptr,
-               ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
-                   ImGuiWindowFlags_NoMove);
-  draw_inspector();
-  ImGui::End();
-}
 
 }  // namespace editor
 }  // namespace tombstone
