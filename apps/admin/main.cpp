@@ -338,7 +338,7 @@ int run_imgui_app() {
 #endif
 
   GLFWwindow* window =
-      glfwCreateWindow(1280, 720, "TombStone Engine \u2014 Admin", nullptr, nullptr);
+      glfwCreateWindow(1280, 720, "TombStone Engine - Admin", nullptr, nullptr);
   if (!window) {
     std::cerr << "glfwCreateWindow failed\n";
     glfwTerminate();

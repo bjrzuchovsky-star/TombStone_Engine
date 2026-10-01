@@ -250,7 +250,7 @@ void Editor2DScreen::draw_ui() {
   if (show_viewport_) {
     ImGui::Begin("Viewport2D", &show_viewport_);
     draw_viewport();
-  ImGui::End();
+    ImGui::End();
   }
   if (show_inspector_) {
     ImGui::Begin("Inspector", &show_inspector_);
