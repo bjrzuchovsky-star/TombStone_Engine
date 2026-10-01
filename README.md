@@ -93,7 +93,7 @@ src/input/              # Input stubs
 src/net/                # Networking stubs (4-player MMO target later)
 src/physics/            # 2D physics stubs
 src/scene/              # Scene stubs
-src/editor/             # Admin UI (AppFlow, settings, projects, workspace, ui, screens)
+src/editor/             # Admin UI (AppFlow, settings, projects, workspace/SceneIO, ui, screens)
 cmake/FetchImGuiDeps.cmake  # FetchContent GLFW + Dear ImGui (admin only)
 apps/admin|client|game/ # Build targets controlled by TS_BUILD_*
 ```
@@ -106,11 +106,11 @@ apps/admin|client|game/ # Build targets controlled by TS_BUILD_*
 2. **Login** -- username/password, Login, Dev login, Settings  
 3. **ProjectManager** -- list projects, Open / double-click, New 2D (validated name), Settings, Logout; errors shown in-UI  
 4. **Settings** -- edit `projects_root` (Browse opens an in-app ImGui folder picker), theme, `auto_login_dev`, username; Apply/Save still validates, writes settings, and reloads projects  
-5. **Editor2D** -- live Hierarchy (create/rename/delete/select under Scene), Viewport2D canvas (rects, pan MMB/Alt-drag, wheel zoom, optional grid), Inspector (name, transform, color/tint, layer/z) + Back  
+5. **Editor2D** -- live Hierarchy (create/rename/delete/select under Scene), Viewport2D canvas (rects, pan MMB/Alt-drag, wheel zoom, optional grid), Inspector (name, transform, color/tint, layer/z) + Back; File → Save Scene  
 
 Namespace: `ts::tombstone::editor`.
 
-**Editor2D workspace** keeps an in-memory entity list (seeded with Camera2D / Player / TileMap placeholders; not persisted yet). Hierarchy edits and Inspector fields update the viewport immediately. **Settings → Browse...** uses a portable ImGui directory browser (no extra native deps); Apply remains the step that validates/writes `projects_root` and reloads the project list.
+**Editor2D workspace** loads/saves `<project>/scene.json` (entities: id/name, x/y/w/h, rgba tint, layer/z, plus pan/zoom/grid). Opening a 2D project loads scene.json when present, otherwise seeds Camera2D / Player / TileMap and writes an initial scene.json. Hierarchy/Inspector edits autosave; leaving the editor (Back / Quit) also saves. Hierarchy edits and Inspector fields update the viewport immediately. **Settings → Browse...** uses a portable ImGui directory browser (no extra native deps); Apply remains the step that validates/writes `projects_root` and reloads the project list.
 
 
 ### Building admin with ImGui
@@ -143,7 +143,7 @@ Defaults are **cwd-relative** (portable; no machine-absolute paths):
 
 `settings.json` fields: `projects_root`, `username` (last-used), `auto_login_dev` (bool), `theme` (`dark`/`light` stub), `last_project_path`.
 
-Each project is a folder under `projects_root` with a `project.json`:
+Each project is a folder under `projects_root` with a `project.json` (and, for 2D projects after first Editor2D open, a `scene.json`):
 
 ```json
 {
@@ -154,6 +154,6 @@ Each project is a folder under `projects_root` with a `project.json`:
 }
 ```
 
-On first run (empty `projects_root`), Admin seeds one sample 2D project. Changing `projects_root` in Settings reloads the project list from the new folder. Local `TombStoneProjects/` and `TombStoneConfig/` are gitignored.
+`scene.json` stores the Editor2D workspace (entity list + view). On first run (empty `projects_root`), Admin seeds one sample 2D project. Changing `projects_root` in Settings reloads the project list from the new folder. Local `TombStoneProjects/` and `TombStoneConfig/` are gitignored.
 
 Configure with CMake 3.20+ and a C++20 toolchain. Toggle `TS_BUILD_ADMIN`, `TS_BUILD_CLIENT`, and `TS_BUILD_GAME` as needed. See **Building admin with ImGui** above when enabling Admin.
