@@ -11,6 +11,7 @@ add_library(ts_editor
   screens/ProjectManagerScreen.cpp
   screens/SettingsScreen.cpp
   screens/Editor2DScreen.cpp
+  screens/Editor2DScreen_Panels.cpp
 )
 
 target_include_directories(ts_editor
