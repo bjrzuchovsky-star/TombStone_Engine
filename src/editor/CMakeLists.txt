@@ -6,6 +6,7 @@ add_library(ts_editor
   workspace/SceneIO_Load.cpp
   workspace/SceneIO_Save.cpp
   ui/FolderBrowser.cpp
+  ui/Theme.cpp
   screens/LoadingScreen.cpp
   screens/LoginScreen.cpp
   screens/ProjectManagerScreen.cpp

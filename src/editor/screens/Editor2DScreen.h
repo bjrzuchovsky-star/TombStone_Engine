@@ -37,9 +37,13 @@ class Editor2DScreen final : public IScreen {
 
  private:
   void draw_ui();
+  void draw_menu_bar();
+  void draw_toolbar();
+  void draw_status_bar();
   void draw_hierarchy();
   void draw_viewport();
   void draw_inspector();
+  void setup_default_dock_layout(unsigned int dockspace_id);
 
   void begin_rename(std::uint64_t id);
   void commit_rename();
@@ -54,6 +58,15 @@ class Editor2DScreen final : public IScreen {
   bool dirty_ = false;
   bool quit_requested_ = false;
   bool back_requested_ = false;
+
+  // Panel visibility (View menu).
+  bool show_hierarchy_ = true;
+  bool show_viewport_ = true;
+  bool show_inspector_ = true;
+  bool show_status_bar_ = true;
+  bool show_toolbar_ = true;
+  bool snap_enabled_ = false;  // placeholder UX only
+  bool dock_layout_initialized_ = false;
 
   // Hierarchy rename state.
   bool renaming_ = false;
