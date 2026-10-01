@@ -1,5 +1,6 @@
 #include "editor/screens/Editor2DScreen.h"
 
+#include "editor/ui/Theme.h"
 #include "editor/workspace/SceneIO.h"
 
 #include <imgui.h>
@@ -45,17 +46,9 @@ bool point_in_entity(float wx, float wy, const Entity2D& e) {
 }  // namespace
 
 void Editor2DScreen::draw_viewport() {
-  ImGui::Text("Viewport2D -- %s", project_.name.c_str());
-  ImGui::SameLine();
-  bool grid = workspace_.show_grid();
-  if (ImGui::Checkbox("Grid", &grid)) {
-    workspace_.set_show_grid(grid);
-    mark_dirty_and_autosave();
-  }
-  ImGui::SameLine();
-  ImGui::TextDisabled("zoom %.2f  pan (%.0f, %.0f)  MMB/drag pan, wheel zoom",
-                      workspace_.zoom(), workspace_.pan_x(),
-                      workspace_.pan_y());
+  theme::SectionHeader("Viewport2D");
+  ImGui::TextDisabled("%s  |  MMB/Alt-drag pan, wheel zoom, click select",
+                      project_.name.c_str());
   ImGui::Separator();
 
   const ImVec2 canvas_pos = ImGui::GetCursorScreenPos();
@@ -71,11 +64,11 @@ void Editor2DScreen::draw_viewport() {
   draw->AddRectFilled(canvas_pos,
                       ImVec2(canvas_pos.x + canvas_size.x,
                              canvas_pos.y + canvas_size.y),
-                      IM_COL32(28, 30, 36, 255));
+                      IM_COL32(22, 24, 30, 255), 4.0f);
   draw->AddRect(canvas_pos,
                 ImVec2(canvas_pos.x + canvas_size.x,
                        canvas_pos.y + canvas_size.y),
-                IM_COL32(60, 65, 75, 255));
+                ImGui::ColorConvertFloat4ToU32(theme::AccentMuted()), 4.0f);
 
   ImGui::InvisibleButton("##ViewportCanvas", canvas_size,
                          ImGuiButtonFlags_MouseButtonLeft |
@@ -87,7 +80,6 @@ void Editor2DScreen::draw_viewport() {
   const float pan_x = workspace_.pan_x();
   const float pan_y = workspace_.pan_y();
 
-  // Pan: middle mouse, or left-drag on empty space (after click fails select).
   if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) {
     panning_ = true;
   }
@@ -98,7 +90,6 @@ void Editor2DScreen::draw_viewport() {
     panning_ = false;
   }
 
-  // Also allow left-drag pan when holding Alt, or space+left (common editor UX).
   const bool alt_pan =
       hovered && ImGui::IsKeyDown(ImGuiKey_LeftAlt) &&
       ImGui::IsMouseDragging(ImGuiMouseButton_Left);
@@ -107,7 +98,6 @@ void Editor2DScreen::draw_viewport() {
     workspace_.add_pan(-delta.x / zoom, -delta.y / zoom);
   }
 
-  // Wheel zoom toward cursor.
   if (hovered) {
     const float wheel = ImGui::GetIO().MouseWheel;
     if (std::abs(wheel) > 0.0f) {
@@ -119,7 +109,6 @@ void Editor2DScreen::draw_viewport() {
     }
   }
 
-  // Click select (top-most by layer).
   if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
       !ImGui::IsKeyDown(ImGuiKey_LeftAlt)) {
     pending_click_select_ = true;
@@ -150,7 +139,6 @@ void Editor2DScreen::draw_viewport() {
     pending_click_select_ = false;
   }
 
-  // Optional left-drag pan when dragging on empty (no selection change mid-drag).
   if (active && ImGui::IsMouseDragging(ImGuiMouseButton_Left) &&
       !ImGui::IsKeyDown(ImGuiKey_LeftAlt) &&
       !workspace_.selected_id().has_value()) {
@@ -158,7 +146,6 @@ void Editor2DScreen::draw_viewport() {
     workspace_.add_pan(-delta.x / zoom, -delta.y / zoom);
   }
 
-  // Grid.
   if (workspace_.show_grid()) {
     const float gs = workspace_.grid_size() * workspace_.zoom();
     if (gs >= 4.0f) {
@@ -167,11 +154,9 @@ void Editor2DScreen::draw_viewport() {
                           workspace_.pan_y(), workspace_.zoom(), canvas_pos,
                           canvas_size);
       const float start_x =
-          canvas_pos.x +
-          std::fmod(origin.x - canvas_pos.x, gs);
+          canvas_pos.x + std::fmod(origin.x - canvas_pos.x, gs);
       const float start_y =
-          canvas_pos.y +
-          std::fmod(origin.y - canvas_pos.y, gs);
+          canvas_pos.y + std::fmod(origin.y - canvas_pos.y, gs);
       const ImU32 grid_col = IM_COL32(55, 58, 68, 180);
       for (float x = start_x; x < canvas_pos.x + canvas_size.x; x += gs) {
         draw->AddLine(ImVec2(x, canvas_pos.y),
@@ -181,17 +166,15 @@ void Editor2DScreen::draw_viewport() {
         draw->AddLine(ImVec2(canvas_pos.x, y),
                       ImVec2(canvas_pos.x + canvas_size.x, y), grid_col);
       }
-      // Axes.
       draw->AddLine(ImVec2(origin.x, canvas_pos.y),
                     ImVec2(origin.x, canvas_pos.y + canvas_size.y),
-                    IM_COL32(90, 60, 60, 220));
+                    IM_COL32(120, 70, 70, 220));
       draw->AddLine(ImVec2(canvas_pos.x, origin.y),
                     ImVec2(canvas_pos.x + canvas_size.x, origin.y),
-                    IM_COL32(60, 90, 60, 220));
+                    IM_COL32(70, 120, 70, 220));
     }
   }
 
-  // Entities as filled rects (layer order).
   draw->PushClipRect(canvas_pos,
                      ImVec2(canvas_pos.x + canvas_size.x,
                             canvas_pos.y + canvas_size.y),
@@ -205,20 +188,23 @@ void Editor2DScreen::draw_viewport() {
         world_to_screen(e.x + e.w, e.y + e.h, workspace_.pan_x(),
                         workspace_.pan_y(), workspace_.zoom(), canvas_pos,
                         canvas_size);
-    draw->AddRectFilled(p0, p1, color_u32(e.color));
+    draw->AddRectFilled(p0, p1, color_u32(e.color), 2.0f);
     const bool selected =
         workspace_.selected_id().has_value() &&
         *workspace_.selected_id() == e.id;
     draw->AddRect(p0, p1,
                   selected ? IM_COL32(255, 220, 80, 255)
                            : IM_COL32(20, 20, 25, 200),
-                  0.0f, 0, selected ? 2.5f : 1.0f);
+                  2.0f, 0, selected ? 2.5f : 1.0f);
     if (workspace_.zoom() >= 0.45f) {
       draw->AddText(ImVec2(p0.x + 4.0f, p0.y + 2.0f),
                     IM_COL32(255, 255, 255, 220), e.name.c_str());
     }
   }
   draw->PopClipRect();
+
+  (void)pan_x;
+  (void)pan_y;
 }
 
 }  // namespace editor
