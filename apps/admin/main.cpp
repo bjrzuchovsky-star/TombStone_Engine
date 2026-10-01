@@ -3,6 +3,7 @@
 #include "editor/AppState.h"
 #include "editor/settings/Settings.h"
 #include "editor/workspace/SceneIO.h"
+#include "editor/ui/Theme.h"
 #include "editor/workspace/Workspace2D.h"
 
 #include <imgui.h>
@@ -27,11 +28,7 @@ using editor::Settings;
 using editor::SettingsStore;
 
 void apply_theme(const Settings& settings) {
-  if (settings.theme == "light") {
-    ImGui::StyleColorsLight();
-  } else {
-    ImGui::StyleColorsDark();
-  }
+  editor::theme::Apply(settings.theme);
 }
 
 int run_console_smoke() {
@@ -341,7 +338,7 @@ int run_imgui_app() {
 #endif
 
   GLFWwindow* window =
-      glfwCreateWindow(1280, 720, "TombStone Admin", nullptr, nullptr);
+      glfwCreateWindow(1280, 720, "TombStone Engine \u2014 Admin", nullptr, nullptr);
   if (!window) {
     std::cerr << "glfwCreateWindow failed\n";
     glfwTerminate();
@@ -355,6 +352,9 @@ int run_imgui_app() {
   ImGuiIO& io = ImGui::GetIO();
   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
   io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+  // Multi-viewport is optional; enable when the backend supports it.
+  io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
+  io.ConfigWindowsMoveFromTitleBarOnly = true;
 
   ImGui_ImplGlfw_InitForOpenGL(window, true);
   ImGui_ImplOpenGL3_Init("#version 330");
@@ -396,9 +396,16 @@ int run_imgui_app() {
     int display_h = 0;
     glfwGetFramebufferSize(window, &display_w, &display_h);
     glViewport(0, 0, display_w, display_h);
-    glClearColor(0.08f, 0.08f, 0.10f, 1.0f);
+    glClearColor(0.07f, 0.08f, 0.10f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
+    if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
+      GLFWwindow* backup_current_context = glfwGetCurrentContext();
+      ImGui::UpdatePlatformWindows();
+      ImGui::RenderPlatformWindowsDefault();
+      glfwMakeContextCurrent(backup_current_context);
+    }
     glfwSwapBuffers(window);
   }
 
