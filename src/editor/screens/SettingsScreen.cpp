@@ -1,7 +1,10 @@
 #include "editor/screens/SettingsScreen.h"
 
+#include "editor/ui/Theme.h"
+
 #include <imgui.h>
 
+#include <algorithm>
 #include <cstring>
 #include <iostream>
 
@@ -55,25 +58,32 @@ void SettingsScreen::on_exit() {
 }
 
 void SettingsScreen::draw_ui() {
-  const ImGuiViewport* viewport = ImGui::GetMainViewport();
-  ImGui::SetNextWindowPos(viewport->WorkPos);
-  ImGui::SetNextWindowSize(viewport->WorkSize);
-  ImGui::Begin("##SettingsRoot", nullptr,
-               ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
-                   ImGuiWindowFlags_NoSavedSettings);
+  theme::BeginRoot("##SettingsRoot");
 
-  ImGui::TextUnformatted("Settings");
+  const ImVec2 avail = ImGui::GetContentRegionAvail();
+  const float panel_w = std::min(avail.x * 0.7f, 640.0f);
+  const float panel_h = std::min(avail.y * 0.85f, 520.0f);
+  ImGui::SetCursorPos(ImVec2((avail.x - panel_w) * 0.5f,
+                             (avail.y - panel_h) * 0.5f));
+  theme::BeginCard("##SettingsCard", panel_w, panel_h);
+
+  theme::SectionHeader("Settings");
   ImGui::TextDisabled("config: %s",
                       SettingsStore::default_settings_path().c_str());
-  ImGui::Separator();
+  ImGui::Spacing();
 
-  ImGui::InputText("projects_root", projects_root_buf_,
+  theme::SectionHeader("Projects");
+  ImGui::TextUnformatted("Projects root folder");
+  ImGui::SetNextItemWidth(-110.0f);
+  ImGui::InputText("##projects_root", projects_root_buf_,
                    sizeof(projects_root_buf_));
   ImGui::SameLine();
-  if (ImGui::Button("Browse...")) {
+  if (theme::SecondaryButton("Browse...", ImVec2(100, 0))) {
     validation_error_.clear();
     folder_browser_.open(projects_root_buf_);
   }
+  theme::StatusInfo(
+      "Browse opens an in-app folder picker (works on all platforms).");
 
   if (folder_browser_.draw("Select projects_root folder")) {
     const std::string picked = folder_browser_.take_result();
@@ -83,35 +93,43 @@ void SettingsScreen::draw_ui() {
     }
   }
 
-  ImGui::InputText("username", username_buf_, sizeof(username_buf_));
-  ImGui::Checkbox("auto_login_dev", &draft_.auto_login_dev);
+  theme::SectionHeader("Account");
+  ImGui::TextUnformatted("Default username");
+  ImGui::SetNextItemWidth(-1);
+  ImGui::InputText("##username", username_buf_, sizeof(username_buf_));
+  ImGui::Checkbox("Auto Dev login on startup", &draft_.auto_login_dev);
+  theme::StatusInfo(
+      "When enabled, Login skips credentials and signs in as the saved user.");
 
-  const char* themes[] = {"dark", "light"};
-  ImGui::Combo("theme", &theme_index_, themes, 2);
+  theme::SectionHeader("Appearance");
+  const char* themes[] = {"Dark (professional)", "Light"};
+  ImGui::SetNextItemWidth(280.0f);
+  ImGui::Combo("##theme", &theme_index_, themes, 2);
+  ImGui::SameLine();
+  ImGui::TextDisabled("Theme");
 
   if (!draft_.last_project_path.empty()) {
-    ImGui::TextDisabled("last_project: %s", draft_.last_project_path.c_str());
+    ImGui::Spacing();
+    theme::SectionHeader("Session");
+    ImGui::TextDisabled("Last project: %s", draft_.last_project_path.c_str());
   }
 
   if (!validation_error_.empty()) {
     ImGui::Spacing();
-    ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.35f, 1.0f), "%s",
-                       validation_error_.c_str());
+    theme::StatusError(validation_error_.c_str());
   }
 
-  ImGui::Spacing();
-  if (ImGui::Button("Apply / Save", ImVec2(140, 0))) {
+  ImGui::Dummy(ImVec2(0, 16.0f));
+  if (theme::PrimaryButton("Apply / Save", ImVec2(160, 34.0f))) {
     request_apply();
   }
   ImGui::SameLine();
-  if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+  if (theme::SecondaryButton("Cancel", ImVec2(120, 34.0f))) {
     request_cancel();
   }
 
-  ImGui::TextDisabled(
-      "Browse opens an in-app folder picker (works on all platforms).");
-
-  ImGui::End();
+  theme::EndCard();
+  theme::EndRoot();
 }
 
 AppState SettingsScreen::on_update(float /*delta_seconds*/) {
