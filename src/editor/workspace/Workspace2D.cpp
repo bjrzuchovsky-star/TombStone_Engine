@@ -72,6 +72,38 @@ void Workspace2D::reset_defaults() {
   selected_id_ = player.id;
 }
 
+
+void Workspace2D::replace_scene(std::vector<Entity2D> entities,
+                                std::optional<std::uint64_t> selected_id,
+                                float pan_x, float pan_y, float zoom,
+                                bool show_grid) {
+  entities_ = std::move(entities);
+  selected_id_.reset();
+  pan_x_ = pan_x;
+  pan_y_ = pan_y;
+  set_zoom(zoom);
+  show_grid_ = show_grid;
+  sync_next_id_from_entities();
+  if (selected_id && find(*selected_id)) {
+    selected_id_ = selected_id;
+  } else if (!entities_.empty()) {
+    selected_id_ = entities_.front().id;
+  }
+}
+
+void Workspace2D::sync_next_id_from_entities() {
+  std::uint64_t max_id = 0;
+  for (const auto& e : entities_) {
+    if (e.id > max_id) {
+      max_id = e.id;
+    }
+  }
+  next_id_ = max_id + 1;
+  if (next_id_ == 0) {
+    next_id_ = 1;
+  }
+}
+
 void Workspace2D::select(std::optional<std::uint64_t> id) {
   if (!id) {
     selected_id_.reset();
