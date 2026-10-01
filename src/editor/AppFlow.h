@@ -5,6 +5,7 @@
 #include "editor/projects/ProjectStore.h"
 #include "editor/screens/IScreen.h"
 #include "editor/settings/Settings.h"
+#include "editor/workspace/Workspace2D.h"
 
 #include <memory>
 #include <string>
@@ -58,6 +59,9 @@ class AppFlow {
   // Editor2D helpers.
   void request_back_to_projects();
   void request_quit();
+  Workspace2D* editor_workspace();
+  const Workspace2D* editor_workspace() const;
+  bool editor_save_scene(std::string* error_out = nullptr);
 
   const std::vector<ProjectInfo>& projects() const {
     return project_store_.projects();

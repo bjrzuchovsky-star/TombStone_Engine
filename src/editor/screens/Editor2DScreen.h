@@ -12,6 +12,7 @@ namespace tombstone {
 namespace editor {
 
 // 2D editor workspace: Hierarchy list, Viewport2D canvas, Inspector properties.
+// Workspace is loaded from / saved to <project>/scene.json.
 class Editor2DScreen final : public IScreen {
  public:
   explicit Editor2DScreen(ProjectInfo project);
@@ -29,6 +30,11 @@ class Editor2DScreen final : public IScreen {
   Workspace2D& workspace() { return workspace_; }
   const Workspace2D& workspace() const { return workspace_; }
 
+  // Persist current workspace to scene.json. Clears dirty on success.
+  bool save_scene(std::string* error_out = nullptr);
+  bool is_dirty() const { return dirty_; }
+  const std::string& scene_path() const { return scene_path_; }
+
  private:
   void draw_ui();
   void draw_hierarchy();
@@ -39,8 +45,13 @@ class Editor2DScreen final : public IScreen {
   void commit_rename();
   void cancel_rename();
 
+  void mark_dirty();
+  void mark_dirty_and_autosave();
+
   ProjectInfo project_;
   Workspace2D workspace_;
+  std::string scene_path_;
+  bool dirty_ = false;
   bool quit_requested_ = false;
   bool back_requested_ = false;
 
