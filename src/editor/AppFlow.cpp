@@ -344,6 +344,32 @@ void AppFlow::request_quit() {
   transition_to(AppState::Quit);
 }
 
+
+Workspace2D* AppFlow::editor_workspace() {
+  if (auto* editor = dynamic_cast<Editor2DScreen*>(screen_.get())) {
+    return &editor->workspace();
+  }
+  return nullptr;
+}
+
+const Workspace2D* AppFlow::editor_workspace() const {
+  if (auto* editor = dynamic_cast<const Editor2DScreen*>(screen_.get())) {
+    return &editor->workspace();
+  }
+  return nullptr;
+}
+
+bool AppFlow::editor_save_scene(std::string* error_out) {
+  auto* editor = dynamic_cast<Editor2DScreen*>(screen_.get());
+  if (!editor) {
+    if (error_out) {
+      *error_out = "Not in Editor2D";
+    }
+    return false;
+  }
+  return editor->save_scene(error_out);
+}
+
 void AppFlow::transition_to(AppState next) {
   if (screen_) {
     screen_->on_exit();
