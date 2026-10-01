@@ -39,6 +39,10 @@ class ProjectStore {
   // Marks last_opened on disk and in the in-memory list.
   bool touch_last_opened(const std::string& project_path);
 
+  // Deletes a project folder from disk (project.json + contents) and refreshes.
+  // project_path must be under projects_root. Refuses paths outside the root.
+  bool delete_project(const std::string& project_path);
+
   // Load a single project.json from a folder (no list mutation).
   static bool load_project_json(const std::string& project_dir,
                                 ProjectInfo* out,

@@ -45,6 +45,7 @@ class AppFlow {
   // ProjectManager helpers.
   bool select_project(std::size_t index);  // Open
   bool create_new_project_2d(const std::string& name = "New 2D Project");
+  bool delete_project(std::size_t index);
   bool open_settings_from_projects();
   bool logout();
 
