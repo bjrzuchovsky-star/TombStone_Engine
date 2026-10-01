@@ -3,6 +3,7 @@ add_library(ts_editor
   settings/Settings.cpp
   projects/ProjectStore.cpp
   workspace/Workspace2D.cpp
+  workspace/SceneIO.cpp
   ui/FolderBrowser.cpp
   screens/LoadingScreen.cpp
   screens/LoginScreen.cpp

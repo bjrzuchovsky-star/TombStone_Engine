@@ -21,13 +21,18 @@ struct Entity2D {
   int layer = 0;                                  // z-order (higher draws later)
 };
 
-// Flat hierarchy under a conceptual root "Scene" node. In-memory for now;
-// optional scene.json persistence can be layered later.
+// Flat hierarchy under a conceptual root "Scene" node.
+// Persisted per project as scene.json via scene_io (load/save).
 class Workspace2D {
  public:
   Workspace2D();
 
   void reset_defaults();  // seed Camera2D / Player / TileMap placeholders
+
+  // Replace full scene state (used by scene.json load).
+  void replace_scene(std::vector<Entity2D> entities,
+                     std::optional<std::uint64_t> selected_id, float pan_x,
+                     float pan_y, float zoom, bool show_grid);
 
   const std::vector<Entity2D>& entities() const { return entities_; }
   std::vector<Entity2D>& entities() { return entities_; }
@@ -65,6 +70,7 @@ class Workspace2D {
 
  private:
   std::uint64_t alloc_id();
+  void sync_next_id_from_entities();
   static std::string unique_name(const std::vector<Entity2D>& existing,
                                  std::string base);
 
