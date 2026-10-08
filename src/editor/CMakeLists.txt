@@ -26,6 +26,7 @@ add_library(ts_editor
   screens/Editor2DScreen_Collision.cpp
   screens/Editor2DScreen_Anim.cpp
   screens/Editor2DScreen_Stable.cpp
+  screens/Editor2DScreen_Console.cpp
   console/TelegraphLog.cpp
   launch/GameLauncher.cpp
   launch/OpenWithOs.cpp

@@ -2,14 +2,17 @@
 
 #include "editor/ProjectInfo.h"
 #include "editor/assets/TextureCache.h"
+#include "editor/console/TelegraphLog.h"
 #include "editor/screens/IScreen.h"
 #include "editor/ui/FolderBrowser.h"
 #include "editor/workspace/Workspace2D.h"
 #include "runtime/PlaySession.h"
+#include "runtime/Script.h"
 #include "scene/Animation.h"
 
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -49,8 +52,17 @@ struct EntityImage {
   bool animated = false;  // the frame comes from an animation set
 };
 
+// What a script file declares, for the Inspector and the Scripts panel.
+struct ScriptInfo {
+  bool ok = false;
+  std::string error;                // file:line when it does not run
+  std::vector<ScriptProp> defaults;  // `props = {...}`, sorted by name
+  std::uint64_t version = 0;        // ScriptLibrary version it was read at
+};
+
 // 2D editor workspace: Hierarchy list, Viewport2D canvas, Inspector
-// properties, Tile Palette and Supply Wagon (assets) panels.
+// properties, Tile Palette, Supply Wagon (assets), Scripts and Telegraph
+// (console) panels.
 // Workspace is loaded from / saved to <project>/scene.json.
 class Editor2DScreen final : public IScreen {
  public:
@@ -237,6 +249,40 @@ class Editor2DScreen final : public IScreen {
   // "Player rode into Gate (tick 26)" while playing; "" otherwise.
   std::string last_trigger_text() const;
 
+  // --- Scripts (Editor2DScreen_Scripts.cpp) ------------------------------------
+  // Script component: set / clear (nullopt) is one undo step + autosave.
+  bool set_script(std::uint64_t id, std::optional<ScriptData> script,
+                  const std::string& label = "Edit Script");
+  // One property override (nullopt = back to the file's default): one undo
+  // step + autosave.
+  bool set_script_prop(std::uint64_t id, const std::string& name,
+                       std::optional<ScriptValue> value);
+  // <project>/scripts/**.lua, project-relative and sorted.
+  void refresh_scripts();
+  const std::vector<std::string>& script_list() const { return scripts_; }
+  // scripts/<name>.lua from a template (sample_scripts::templates()); never
+  // overwrites. rel_out gets the project-relative path.
+  bool create_script(const std::string& name, const std::string& template_id,
+                     std::string* rel_out = nullptr);
+  // Hand a script to the OS default editor (ShellExecute / open / xdg-open).
+  bool open_script(const std::string& rel);
+  // Declared props of a script, re-read when the file changes.
+  const ScriptInfo& script_info(const std::string& rel);
+  // Play: re-run scripts saved since the last check (the viewport polls
+  // twice a second). Returns files reloaded.
+  int reload_play_scripts();
+
+  // --- Telegraph console (Editor2DScreen_Console.cpp) ------------------------
+  // World lines (scripts, toasts, triggers) arrive while playing; editor
+  // notes always. Clicking a line with an entity selects it.
+  TelegraphLog& telegraph() { return telegraph_; }
+  const TelegraphLog& telegraph() const { return telegraph_; }
+  // Move the running world's new lines into the Telegraph.
+  std::size_t pump_play_logs();
+  // Select the entity a line points at (and frame it when editing). False
+  // when there is none, or it only lived in the ride.
+  bool focus_log_entry(const runtime::LogEntry& entry);
+
  private:
   void draw_ui();
   void draw_menu_bar();
@@ -252,6 +298,15 @@ class Editor2DScreen final : public IScreen {
   void draw_play_viewport();   // Viewport2D while playing
   void draw_play_status();     // status-bar section while playing
   void draw_play_menu();
+  // Script toasts over the play viewport, newest at the bottom.
+  void draw_play_toasts(ImDrawList* draw, const ImVec2& canvas_pos,
+                        const ImVec2& canvas_size);
+  // Script section of the Inspector; Scripts panel; Telegraph panel and its
+  // status-bar badge.
+  void draw_inspector_script(std::uint64_t id);
+  void draw_scripts_panel();
+  void draw_console();
+  void draw_telegraph_badge();
   // Animator section of the Inspector and the Stable panel
   // (Editor2DScreen_Anim.cpp / Editor2DScreen_Stable.cpp).
   void draw_inspector_animator(std::uint64_t id);
@@ -266,7 +321,7 @@ class Editor2DScreen final : public IScreen {
   void draw_collision_overlay(ImDrawList* draw, const ImVec2& canvas_pos,
                               const ImVec2& canvas_size, float center_x,
                               float center_y, float zoom);
-  // Keyboard (WASD / arrows, Space, Shift, Enter) + gamepads via GLFW.
+  // Keyboard (WASD / arrows, E / Space, Shift, Enter) + gamepads via GLFW.
   runtime::InputFrame poll_play_input() const;
   void draw_tile_palette();
   void draw_supply_wagon();
@@ -320,6 +375,9 @@ class Editor2DScreen final : public IScreen {
   bool show_tile_palette_ = true;
   bool show_supply_wagon_ = true;
   bool show_stable_ = true;
+  bool show_scripts_ = true;
+  bool show_console_ = true;
+  bool focus_console_ = false;  // bring the Telegraph forward next frame
   bool dock_layout_initialized_ = false;
 
   // Hierarchy rename state.
@@ -410,6 +468,22 @@ class Editor2DScreen final : public IScreen {
   // Collision overlay (K).
   bool show_collision_ = false;
   std::vector<runtime::OverlayBox> overlay_boxes_;
+
+  // Scripts: the project's .lua files, what each declares, and the panel.
+  std::vector<std::string> scripts_;
+  double scripts_refresh_time_ = -1000.0;
+  runtime::ScriptLibrary script_lib_;
+  std::map<std::string, ScriptInfo> script_infos_;
+  std::string scripts_selected_;  // highlighted file in the Scripts panel
+  char new_script_name_[64]{};
+  int new_script_template_ = 0;
+  double play_scripts_poll_ = 0.0;  // last hot-reload check while playing
+
+  // Telegraph console.
+  TelegraphLog telegraph_;
+  char telegraph_search_[128]{};
+  bool telegraph_autoscroll_ = true;
+  std::uint64_t telegraph_seen_total_ = 0;  // for auto-scroll on new lines
 
   // Status-bar note (e.g. "Duplicated 3").
   std::string status_note_;
