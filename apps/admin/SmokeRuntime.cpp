@@ -1,5 +1,6 @@
 #include "SmokeRuntime.h"
 
+#include "SmokeAnimation.h"
 #include "SmokeCollision.h"
 
 #include "editor/ProjectInfo.h"
@@ -542,7 +543,7 @@ int run_runtime_smoke() {
   }
   std::cout << "[smoke] runtime OK (60 Hz fixed step, player px/s, diagonal "
                "clamp, spawn point, follow camera + bounds, draw list, "
-               "pause/step/stop, v2 -> v3 -> v4 upgrade + roundtrip)\n";
+               "pause/step/stop, v2 -> current upgrade + roundtrip)\n";
   if (check_play_mode() != 0) {
     return 1;
   }
@@ -550,5 +551,8 @@ int run_runtime_smoke() {
                "camera follow, edit tools locked, pause holds, F10 = 1 "
                "tick, stop restores workspace byte-identical, undo history + "
                "scene.json untouched, v2 project rides)\n";
-  return run_collision_smoke();
+  if (run_collision_smoke() != 0) {
+    return 1;
+  }
+  return run_animation_smoke();
 }
