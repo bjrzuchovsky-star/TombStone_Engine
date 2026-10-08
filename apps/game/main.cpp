@@ -177,7 +177,18 @@ int run_smoke(const std::string& dir) {
   runtime::InputFrame right;
   right.slot(0).move_x = 1.0f;
   right.slot(0).connected = true;
-  session.run_ticks(runtime::kTickRate, right);
+  // Tick by tick, counting P1's animation frame changes within one clip.
+  int frame_changes = 0;
+  for (int i = 0; i < runtime::kTickRate; ++i) {
+    const runtime::Actor* a = world.player(0);
+    const std::string clip0 = a ? a->anim.clip : std::string();
+    const int frame0 = a ? a->anim.frame : 0;
+    session.run_ticks(1, right);
+    a = world.player(0);
+    if (a && !clip0.empty() && a->anim.clip == clip0 && a->anim.frame != frame0) {
+      ++frame_changes;
+    }
+  }
   if (session.tick() != static_cast<std::uint64_t>(runtime::kTickRate)) {
     return fail("expected 60 ticks");
   }
@@ -223,6 +234,28 @@ int run_smoke(const std::string& dir) {
   if (quads.empty()) {
     return fail("nothing to draw around the camera");
   }
+  // An animated P1 draws a frame of its sheet and changed frames on the ride.
+  std::string anim_note = "P1 not animated";
+  const AnimLibrary::Entry* anim = nullptr;
+  if (rider && (anim = world.anim_set(*rider)) != nullptr) {
+    if (!anim->ok) {
+      anim_note = "P1 animator: " + anim->error;
+    } else {
+      const runtime::DrawQuad* rq = nullptr;
+      for (const runtime::DrawQuad& q : quads) {
+        if (q.entity == rider->data.id) rq = &q;
+      }
+      if (!rq || rq->missing || !rq->image || *rq->image != anim->image) {
+        return fail("P1 should draw a frame of " + anim->image);
+      }
+      if (frame_changes < 2) {
+        return fail("P1 animation did not advance (" +
+                    std::to_string(frame_changes) + " frame changes)");
+      }
+      anim_note = "P1 " + rider->anim.clip + " " +
+                  std::to_string(frame_changes) + " frame changes";
+    }
+  }
 
   // K overlay over the same view: P1's collider is there, solid tiles
   // come from the project's tile_solidity.
@@ -252,7 +285,7 @@ int run_smoke(const std::string& dir) {
     return fail("scene.json changed (the game must never write it)");
   }
   std::cout << "[smoke] ts_game OK (\"" << project_name(dir) << "\": "
-            << actor_count << " actors, " << ride << ", "
+            << actor_count << " actors, " << ride << ", " << anim_note << ", "
             << quads.size() << " quads, K overlay " << boxes.size()
             << (boxes.size() == 1 ? " box" : " boxes") << " ("
             << solid_tiles << " solid tile run" << (solid_tiles == 1 ? "" : "s")
