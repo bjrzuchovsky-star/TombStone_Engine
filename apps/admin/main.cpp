@@ -763,9 +763,12 @@ int run_console_smoke() {
       std::ifstream in(scene_file);
       std::stringstream ss;
       ss << in.rdbuf();
-      if (ss.str().find("\"version\": 3") == std::string::npos ||
+      const std::string current_version =
+          "\"version\": " +
+          std::to_string(editor::scene_io::kSceneVersion);
+      if (ss.str().find(current_version) == std::string::npos ||
           ss.str().find("\"encoding\": \"rle\"") == std::string::npos) {
-        return fail("scene.json should be version 3 with RLE tiles");
+        return fail("scene.json should be the current version with RLE tiles");
       }
     }
     {
