@@ -11,6 +11,7 @@ scene_json::SceneDoc to_doc(const Workspace2D& workspace) {
   scene_json::SceneDoc doc;
   doc.version = kSceneVersion;
   doc.entities = workspace.entities();
+  doc.tile_solidity = workspace.tile_solidity();
   doc.pan_x = workspace.pan_x();
   doc.pan_y = workspace.pan_y();
   doc.zoom = workspace.zoom();

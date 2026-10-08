@@ -20,6 +20,7 @@ Workspace2D::Workspace2D() {
 
 void Workspace2D::reset_defaults() {
   entities_.clear();
+  tile_solidity_ = TileSolidity{};
   selected_id_.reset();
   selection_.clear();
   move_starts_.clear();
@@ -58,6 +59,8 @@ void Workspace2D::reset_defaults() {
   player.layer = 5;
   // Rides on player slot 0 (WASD / arrows / first gamepad) in Play mode.
   player.player = PlayerControllerData{};
+  // Bumps into solid tiles and static colliders (whole rect, dynamic).
+  player.collider = default_collider(player);
   entities_.push_back(player);
   // The seeded camera trails the rider.
   Camera2DData follow;
@@ -107,6 +110,28 @@ void Workspace2D::replace_scene(std::vector<Entity2D> entities,
   } else if (!entities_.empty()) {
     select(entities_.front().id);
   }
+}
+
+void Workspace2D::set_tile_solidity(TileSolidity solidity) {
+  solidity.normalize();
+  tile_solidity_ = std::move(solidity);
+}
+
+bool Workspace2D::set_tile_solid(const std::string& tileset, int tile_id,
+                                 bool solid) {
+  return tile_solidity_.set_solid(tileset, tile_id, solid);
+}
+
+bool Workspace2D::set_collider(std::uint64_t id,
+                               std::optional<ColliderData> collider) {
+  Entity2D* e = find(id);
+  if (!e) {
+    return false;
+  }
+  const std::optional<ColliderData> before = e->collider;
+  e->collider = std::move(collider);
+  normalize_components(*e);
+  return e->collider != before;
 }
 
 void Workspace2D::sync_next_id_from_entities() {

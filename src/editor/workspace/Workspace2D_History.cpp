@@ -16,6 +16,7 @@ const std::string kEmptyLabel;
 Workspace2D::Snapshot Workspace2D::snapshot() const {
   Snapshot s;
   s.entities = entities_;
+  s.tile_solidity = tile_solidity_;
   s.selected_id = selected_id_;
   s.selection = selection_;
   return s;
@@ -23,6 +24,7 @@ Workspace2D::Snapshot Workspace2D::snapshot() const {
 
 void Workspace2D::restore(const Snapshot& s) {
   entities_ = s.entities;
+  tile_solidity_ = s.tile_solidity;
   move_starts_.clear();
   move_active_ = false;
   move_changed_ = false;
@@ -41,7 +43,7 @@ void Workspace2D::restore(const Snapshot& s) {
 }
 
 bool Workspace2D::same_entities(const Snapshot& s) const {
-  return s.entities == entities_;
+  return s.entities == entities_ && s.tile_solidity == tile_solidity_;
 }
 
 bool Workspace2D::commit_step(std::string label, Snapshot before) {

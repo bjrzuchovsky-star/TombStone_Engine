@@ -17,9 +17,11 @@ namespace editor {
 // Entity2D and its components live in scene/SceneData.h (shared with the
 // runtime); the editor works on the same structs.
 using ::ts::tombstone::Camera2DData;
+using ::ts::tombstone::ColliderData;
 using ::ts::tombstone::Entity2D;
 using ::ts::tombstone::PlayerControllerData;
 using ::ts::tombstone::SpawnPointData;
+using ::ts::tombstone::TileSolidity;
 
 // Flat hierarchy under a conceptual root "Scene" node.
 // Persisted per project as scene.json via scene_io (load/save).
@@ -148,6 +150,17 @@ class Workspace2D {
   // Topmost TileMap under a world point.
   std::optional<std::uint64_t> pick_tilemap(float wx, float wy) const;
 
+  // Which tile ids are solid, per tileset ("" = built-in palette). Part of
+  // the undo history and of scene.json (v4 "tile_solidity").
+  const TileSolidity& tile_solidity() const { return tile_solidity_; }
+  void set_tile_solidity(TileSolidity solidity);
+  // True when the flag changed.
+  bool set_tile_solid(const std::string& tileset, int tile_id, bool solid);
+
+  // --- Collision -------------------------------------------------------------
+  // nullopt removes the collider. Returns true if anything changed.
+  bool set_collider(std::uint64_t id, std::optional<ColliderData> collider);
+
   // --- Sprites ---------------------------------------------------------------
   // nullopt removes the sprite. Returns true if anything changed.
   bool set_sprite(std::uint64_t id, std::optional<SpriteData> sprite);
@@ -159,10 +172,11 @@ class Workspace2D {
   std::vector<std::size_t> sorted_draw_order() const;
 
   // --- Undo / redo (in-memory, snapshot based) -----------------------------
-  // A snapshot is the entity list plus selection. Camera, grid and snap are
-  // view settings and are not part of history.
+  // A snapshot is the entity list, tile solidity and selection. Camera, grid
+  // and snap are view settings and are not part of history.
   struct Snapshot {
     std::vector<Entity2D> entities;
+    TileSolidity tile_solidity;
     std::optional<std::uint64_t> selected_id;
     std::vector<std::uint64_t> selection;
   };
@@ -171,7 +185,8 @@ class Workspace2D {
   Snapshot snapshot() const;
   // Restore entities + selection. Ids are never reused (next id only grows).
   void restore(const Snapshot& s);
-  // True when the entity lists match field for field (selection ignored).
+  // True when the entity lists and tile solidity match field for field
+  // (selection ignored).
   bool same_entities(const Snapshot& s) const;
 
   // Push one committed step whose pre-edit state is `before`. Skipped when
@@ -234,6 +249,7 @@ class Workspace2D {
   std::string pending_label_;
 
   std::vector<Entity2D> entities_;
+  TileSolidity tile_solidity_;
   std::optional<std::uint64_t> selected_id_;
   std::vector<std::uint64_t> selection_;
   std::vector<MoveStart> move_starts_;
