@@ -9,6 +9,7 @@
 #include "scene/SceneData.h"
 #include "scene/TileMap.h"
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -49,7 +50,9 @@ class PlaySession {
   bool step_once(const InputFrame& input);
 
   // Feed real elapsed time. Runs 0..kMaxCatchUpTicks ticks while Playing,
-  // none while Paused / Stopped. Returns the number of ticks run.
+  // none while Paused / Stopped. Returns the number of ticks run. Buttons
+  // seen on a frame that ran no tick ride along on the next tick, so a
+  // quick tap of the action button is never lost between ticks.
   int update(double real_seconds, const InputFrame& input);
   // Deterministic: n ticks regardless of the clock (tests, --smoke).
   void run_ticks(int n, const InputFrame& input);
@@ -79,6 +82,7 @@ class PlaySession {
   double window_seconds_ = 0.0;
   int window_ticks_ = 0;
   double measured_tps_ = 0.0;
+  std::array<std::uint32_t, kMaxPlayers> latched_{};  // buttons awaiting a tick
 };
 
 }  // namespace runtime

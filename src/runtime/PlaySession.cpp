@@ -24,6 +24,7 @@ void PlaySession::reset_clock() {
   window_seconds_ = 0.0;
   window_ticks_ = 0;
   measured_tps_ = 0.0;
+  latched_ = {};
 }
 
 bool PlaySession::start(const std::vector<Entity2D>& entities,
@@ -98,9 +99,22 @@ int PlaySession::update(double real_seconds, const InputFrame& input) {
   const double dt = std::clamp(real_seconds, 0.0, kMaxFrameSeconds);
   play_seconds_ += dt;
   accumulator_ += dt;
+  for (int s = 0; s < kMaxPlayers; ++s) {
+    latched_[static_cast<std::size_t>(s)] |= input.slot(s).buttons;
+  }
   int ran = 0;
   while (accumulator_ >= kTickSeconds && ran < kMaxCatchUpTicks) {
-    world_.step(input);
+    if (ran == 0) {
+      // First tick of the frame also carries taps from tick-less frames.
+      InputFrame in = input;
+      for (int s = 0; s < kMaxPlayers; ++s) {
+        in.slot(s).buttons |= latched_[static_cast<std::size_t>(s)];
+      }
+      latched_ = {};
+      world_.step(in);
+    } else {
+      world_.step(input);
+    }
     accumulator_ -= kTickSeconds;
     ++ran;
   }
