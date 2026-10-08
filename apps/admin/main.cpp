@@ -9,6 +9,9 @@
 #include "editor/ui/Brand.h"
 #include "editor/ui/Theme.h"
 #include "editor/workspace/Workspace2D.h"
+#include "gfx/GlTextureUploader.h"
+
+#include "SmokeRuntime.h"
 
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
@@ -40,47 +43,6 @@ using editor::SettingsStore;
 void apply_theme(const Settings& settings) {
   editor::theme::Apply(settings.theme);
 }
-
-#ifndef GL_CLAMP_TO_EDGE
-#define GL_CLAMP_TO_EDGE 0x812F  // GL 1.2; Windows' gl.h stops at 1.1
-#endif
-
-// OpenGL side of the editor's renderer-agnostic texture cache. Only GL 1.1
-// entry points, so the stock opengl32 / libGL exports are enough.
-class GlTextureUploader final : public editor::TextureUploader {
- public:
-  std::uint64_t upload_rgba(const unsigned char* pixels, int width,
-                            int height) override {
-    if (!pixels || width <= 0 || height <= 0) {
-      return 0;
-    }
-    GLint prev = 0;
-    glGetIntegerv(GL_TEXTURE_BINDING_2D, &prev);
-    GLuint tex = 0;
-    glGenTextures(1, &tex);
-    if (tex == 0) {
-      return 0;
-    }
-    glBindTexture(GL_TEXTURE_2D, tex);
-    // Nearest: pixel art and tile slices stay crisp when zoomed.
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA,
-                 GL_UNSIGNED_BYTE, pixels);
-    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(prev));
-    return static_cast<std::uint64_t>(tex);
-  }
-  void destroy(std::uint64_t handle) override {
-    const GLuint tex = static_cast<GLuint>(handle);
-    if (tex != 0) {
-      glDeleteTextures(1, &tex);
-    }
-  }
-};
 
 // Tiny uncompressed 32-bit TGA writer so --smoke can make test images
 // without any extra dependency (stb_image decodes TGA).
@@ -801,9 +763,9 @@ int run_console_smoke() {
       std::ifstream in(scene_file);
       std::stringstream ss;
       ss << in.rdbuf();
-      if (ss.str().find("\"version\": 2") == std::string::npos ||
+      if (ss.str().find("\"version\": 3") == std::string::npos ||
           ss.str().find("\"encoding\": \"rle\"") == std::string::npos) {
-        return fail("scene.json should be version 2 with RLE tiles");
+        return fail("scene.json should be version 3 with RLE tiles");
       }
     }
     {
@@ -1188,6 +1150,11 @@ int run_console_smoke() {
   flow.request_quit();
   engine.shutdown();
 
+  // Runtime + Play mode (headless; see SmokeRuntime.cpp).
+  if (run_runtime_smoke() != 0) {
+    return 1;
+  }
+
   std::cout << "TombStone Admin smoke complete\n";
   return flow.current_state() == AppState::Quit ? 0 : 1;
 }
@@ -1227,8 +1194,8 @@ int run_imgui_app() {
   ImGui_ImplGlfw_InitForOpenGL(window, true);
   ImGui_ImplOpenGL3_Init("#version 330");
   // Sprites / tilesets upload through this while the GL context lives.
-  static GlTextureUploader gl_uploader;
-  editor::set_texture_uploader(&gl_uploader);
+  static gfx::GlTextureUploader gl_uploader;
+  gfx::set_texture_uploader(&gl_uploader);
 
   Engine engine;
   if (!engine.init()) {
@@ -1295,7 +1262,7 @@ int run_imgui_app() {
 
   engine.shutdown();
   // Live caches drop (not delete) their handles once the context is gone.
-  editor::set_texture_uploader(nullptr);
+  gfx::set_texture_uploader(nullptr);
   ImGui_ImplOpenGL3_Shutdown();
   ImGui_ImplGlfw_Shutdown();
   ImGui::DestroyContext();

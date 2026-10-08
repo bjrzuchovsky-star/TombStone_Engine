@@ -1,5 +1,6 @@
 add_executable(ts_admin
   main.cpp
+  SmokeRuntime.cpp
 )
 
 target_link_libraries(ts_admin
@@ -11,6 +12,8 @@ target_link_libraries(ts_admin
     ts_net
     ts_physics
     ts_scene
+    ts_runtime
+    ts_gfx
     ts_editor
     ts_imgui
 )
