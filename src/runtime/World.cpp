@@ -71,6 +71,7 @@ bool World::build(const std::vector<Entity2D>& entities,
   }
   draw_order_ = draw_order(plain);
   setup_collision();
+  setup_animation();
   setup_camera();
   return true;
 }
@@ -101,6 +102,8 @@ void World::clear() {
   events_.clear();
   last_event_.reset();
   events_total_ = 0;
+  anim_sets_.clear();
+  anim_paths_.clear();
 }
 
 Actor* World::find(std::uint64_t id) {
@@ -293,6 +296,8 @@ void World::step_players(const InputFrame& input) {
       mx /= len;
       my /= len;
     }
+    a.in_x = mx;
+    a.in_y = my;
     const float x0 = a.data.x;
     const float y0 = a.data.y;
     move_body(a, mx * a.data.player->speed * dt,
@@ -316,7 +321,8 @@ void World::step(const InputFrame& input) {
   step_players(input);
   separate_dynamics();
   update_triggers();
-  // Later: sprite animation, scripts hooked on trigger_events().
+  step_animation();
+  // Later: scripts hooked on trigger_events().
   step_camera();
   ++tick_;
 }
@@ -421,7 +427,25 @@ void World::build_draw_list(const WorldRect& view, float alpha,
       q.rgba[i] = e.color[i];
     }
     q.entity = e.id;
-    if (e.sprite) {
+    const AnimLibrary::Entry* anim = anim_set(a);
+    if (anim && anim->ok) {
+      const AnimClip* clip = anim->set.find(a.anim.clip);
+      int img_w = 0;
+      int img_h = 0;
+      if (clip && size_of(anim->image, &img_w, &img_h)) {
+        const AnimRect r = anim->set.frame_rect(*clip, a.anim.frame);
+        q.image = &anim->image;
+        q.u0 = static_cast<float>(r.x) / static_cast<float>(img_w);
+        q.v0 = static_cast<float>(r.y) / static_cast<float>(img_h);
+        q.u1 = static_cast<float>(r.x + r.w) / static_cast<float>(img_w);
+        q.v1 = static_cast<float>(r.y + r.h) / static_cast<float>(img_h);
+        const bool sprite_flip_x = e.sprite && e.sprite->flip_x;
+        if (sprite_flip_x != a.anim.flip_x) std::swap(q.u0, q.u1);
+        if (e.sprite && e.sprite->flip_y) std::swap(q.v0, q.v1);
+      } else {
+        q.missing = true;
+      }
+    } else if (e.sprite) {
       const SpriteData& sp = *e.sprite;
       int img_w = 0;
       int img_h = 0;
@@ -440,6 +464,8 @@ void World::build_draw_list(const WorldRect& view, float alpha,
       } else {
         q.missing = true;
       }
+    } else if (anim) {
+      q.missing = true;  // broken / missing .anim.json and no sprite
     }
     out->push_back(q);
   }

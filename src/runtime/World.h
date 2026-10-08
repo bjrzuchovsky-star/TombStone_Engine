@@ -7,6 +7,7 @@
 
 #include "runtime/Collision.h"
 #include "runtime/Input.h"
+#include "scene/Animation.h"
 #include "scene/SceneData.h"
 #include "scene/TileMap.h"
 
@@ -27,6 +28,23 @@ namespace runtime {
 inline constexpr int kTickRate = 60;
 inline constexpr double kTickSeconds = 1.0 / kTickRate;
 
+// Which way a rider looks (top-down). Picks the idle_ / walk_ clip.
+enum class Facing : std::uint8_t { Down, Up, Left, Right };
+// "down" / "up" / "left" / "right" (clip name suffixes).
+const char* to_string(Facing facing);
+
+// Where an animator is in its set. Rebuilt with the world.
+struct AnimState {
+  int set = -1;          // index into the world's sets (-1 = no animation)
+  std::string clip;      // clip playing now
+  double time = 0.0;     // seconds into it (speed-scaled)
+  int frame = 0;         // frame index within the clip
+  bool finished = false; // a once clip resting on its last frame
+  bool flip_x = false;   // mirrored stand-in (left from a right clip)
+  bool hold = false;     // play_clip(..., hold): auto-pick keeps out
+  bool walking = false;  // players: move input this tick
+};
+
 // Runtime state for one entity. `data` starts as the authored entity and
 // is the live copy (x/y move); the rest is state the editor never sees.
 struct Actor {
@@ -35,7 +53,11 @@ struct Actor {
   float prev_y = 0.0f;
   float vx = 0.0f;      // world px / s actually moved in the latest tick
   float vy = 0.0f;      // (after walls; 0 when stopped flush)
-  int facing = 1;       // +1 right, -1 left (sprite flip / animation later)
+  int facing = 1;       // +1 right, -1 left (last horizontal heading)
+  Facing dir = Facing::Down;  // four-way heading; kept while idle
+  float in_x = 0.0f;    // move intent of the latest tick (-1..1)
+  float in_y = 0.0f;
+  AnimState anim;
 };
 
 // What the camera shows: world point at the view centre plus scale
@@ -155,8 +177,29 @@ class World {
   // Largest single move before resolution splits it (tests / overlay).
   float substep_limit() const { return step_limit_; }
 
+  // --- Animation (World_Anim.cpp) ---------------------------------------------
+  // Animators advance on the fixed tick. Riders pick idle_<dir> / walk_<dir>
+  // from their move intent (falling back to fewer directions, mirroring
+  // right for left, then the default clip) and keep facing while idle.
+  // Sets come from the library, which outlives build() and re-reads a
+  // changed .anim.json on the next build.
+  AnimLibrary& anim_library() { return anim_lib_; }
+  const AnimLibrary::Entry* anim_set(const Actor& a) const;
+  // Play `clip` on entity `id` (restart = from frame 0 even if already on
+  // it). hold keeps a rider's auto-pick off it until release_clip(). False
+  // when the entity has no animator or the set has no such clip.
+  bool play_clip(std::uint64_t id, const std::string& clip,
+                 bool restart = true, bool hold = false);
+  void release_clip(std::uint64_t id);
+  // Clip a rider auto-picks for a heading (also used by the editor preview).
+  // Sets *flip_x when a right clip stands in for left (or vice versa).
+  static std::string pick_clip(const AnimSet& set, Facing dir, int facing,
+                               bool walking, const std::string& fallback,
+                               bool* flip_x);
+
   // Quads for everything visible in `view`, back to front. Cameras and
-  // spawn points are editor markers and do not draw.
+  // spawn points are editor markers and do not draw. Animators draw the
+  // current frame of their sheet in place of the sprite image.
   void build_draw_list(const WorldRect& view, float alpha,
                        const ImageSizeFn& image_size,
                        std::vector<DrawQuad>* out) const;
@@ -188,6 +231,12 @@ class World {
   void update_triggers();
   void step_players(const InputFrame& input);
   void step_camera();
+  void setup_animation();
+  void step_animation();
+  // Switch an actor's clip; time carries over between directions of one
+  // move (walk_left -> walk_up) and resets otherwise.
+  static void set_clip(AnimState& st, const std::string& clip, bool flip_x,
+                       bool restart);
   void clamp_camera(float* x, float* y) const;
   bool target_center(float* x, float* y) const;
 
@@ -211,6 +260,12 @@ class World {
   std::vector<TriggerEvent> events_;
   std::optional<TriggerEvent> last_event_;
   std::uint64_t events_total_ = 0;
+
+  // Animation sets used by this build (copied out of the library so the
+  // world stays self-contained); actors index into it.
+  std::vector<AnimLibrary::Entry> anim_sets_;
+  std::vector<std::string> anim_paths_;
+  AnimLibrary anim_lib_;
 };
 
 }  // namespace runtime

@@ -5,6 +5,7 @@
 add_library(ts_runtime
   World.cpp
   World_Collision.cpp
+  World_Anim.cpp
   PlaySession.cpp
 )
 
