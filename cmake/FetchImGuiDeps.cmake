@@ -70,3 +70,21 @@ target_compile_definitions(ts_imgui
 
 # Windows: glfw links the right system libs via its own CMake.
 # Linux: needs X11 + OpenGL development packages at configure time.
+
+# stb_image (single header, public domain / MIT dual license) for the Admin
+# editor's sprite + tileset loading. Pinned to one commit and checked by
+# hash; only the header is downloaded (nothing is committed here).
+set(TS_STB_COMMIT 2c980bb59875b0d32144a71867fbdebb2f77cd20)
+FetchContent_Declare(
+  ts_stb_image
+  URL      https://raw.githubusercontent.com/nothings/stb/${TS_STB_COMMIT}/stb_image.h
+  URL_HASH SHA256=594c2fe35d49488b4382dbfaec8f98366defca819d916ac95becf3e75f4200b3
+  DOWNLOAD_NO_EXTRACT TRUE
+)
+# No CMakeLists.txt in the download, so this only populates the source dir.
+FetchContent_MakeAvailable(ts_stb_image)
+
+# Header-only interface target; the implementation is compiled once in
+# src/editor/assets/StbImageImpl.cpp.
+add_library(ts_stb_image INTERFACE)
+target_include_directories(ts_stb_image INTERFACE ${ts_stb_image_SOURCE_DIR})

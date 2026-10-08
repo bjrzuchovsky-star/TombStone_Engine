@@ -344,6 +344,9 @@ bool ProjectStore::create_project_2d(const std::string& name,
   if (!write_project_json(info, &last_error_)) {
     return false;
   }
+  // Sprite / tileset images live in <project>/assets (Supply Wagon panel).
+  // Best effort: the editor recreates it on open if this fails.
+  fs::create_directories(dir / "assets", ec);
 
   if (!refresh()) {
     return false;

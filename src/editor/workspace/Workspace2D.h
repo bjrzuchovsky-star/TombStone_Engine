@@ -1,5 +1,7 @@
 #pragma once
 
+#include "editor/workspace/TileMap.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -21,6 +23,10 @@ struct Entity2D {
   float h = 64.0f;
   float color[4] = {0.35f, 0.65f, 0.95f, 1.0f};  // RGBA tint
   int layer = 0;                                  // z-order (higher draws later)
+  // Optional components. A TileMap entity's w/h follow its grid; a sprite
+  // draws a textured quad tinted by `color` (falls back to the rect).
+  std::optional<TileMapData> tilemap;
+  std::optional<SpriteData> sprite;
 };
 
 bool operator==(const Entity2D& a, const Entity2D& b);
@@ -124,6 +130,42 @@ class Workspace2D {
   static constexpr float kMinGrid = 2.0f;
   static constexpr float kMaxGrid = 512.0f;
 
+  // --- TileMaps (Workspace2D_Tiles.cpp) -------------------------------------
+  // New TileMap entity (selected). Returns id.
+  std::uint64_t create_tilemap(std::string name = "TileMap", int cols = 16,
+                               int rows = 8, int tile_size = 32);
+  // Cell under a world point (floor). Returns true when inside the grid.
+  bool world_to_cell(std::uint64_t id, float wx, float wy, int* col,
+                     int* row) const;
+  // Tile id at a cell; -1 when id is not a TileMap or the cell is outside.
+  int tile_at(std::uint64_t id, int col, int row) const;
+  // Square brush (size 1..3, centred on the cell). Returns cells changed.
+  std::size_t paint_tiles(std::uint64_t id, int col, int row, int tile_id,
+                          int brush = 1);
+  // Brush along a line of cells (no gaps on fast drags).
+  std::size_t paint_line(std::uint64_t id, int c0, int r0, int c1, int r1,
+                         int tile_id, int brush = 1);
+  // 4-connected bucket fill of the region matching the clicked tile.
+  std::size_t flood_fill(std::uint64_t id, int col, int row, int tile_id);
+  std::size_t fill_rect(std::uint64_t id, int c0, int r0, int c1, int r1,
+                        int tile_id);
+  bool resize_tilemap(std::uint64_t id, int cols, int rows);
+  bool set_tile_size(std::uint64_t id, int tile_size);
+  bool set_tileset(std::uint64_t id, std::string path);
+  // Keep w/h equal to the grid extent.
+  static void sync_tilemap_extent(Entity2D& e);
+  // First TileMap in draw order (0 when none).
+  std::uint64_t first_tilemap() const;
+  // Topmost TileMap under a world point.
+  std::optional<std::uint64_t> pick_tilemap(float wx, float wy) const;
+
+  // --- Sprites ---------------------------------------------------------------
+  // nullopt removes the sprite. Returns true if anything changed.
+  bool set_sprite(std::uint64_t id, std::optional<SpriteData> sprite);
+  // New sprite entity (white tint, selected). Returns id.
+  std::uint64_t create_sprite_entity(std::string name, std::string path,
+                                     float x, float y, float w, float h);
+
   // Sorted copy of entity indices by layer ascending (stable by id).
   std::vector<std::size_t> sorted_draw_order() const;
 
@@ -156,6 +198,8 @@ class Workspace2D {
   void set_edit_label(std::string label);
   bool commit_edit();
   void cancel_edit();  // drop the pending before-state (keeps current state)
+  // Drop the pending edit AND restore its before-state (Esc mid-stroke).
+  bool revert_edit();
   bool edit_open() const { return pending_.has_value(); }
   // Open and has actually changed entities (i.e. commit would push a step).
   bool edit_changed() const { return pending_ && !same_entities(*pending_); }
@@ -175,6 +219,7 @@ class Workspace2D {
 
  private:
   std::uint64_t alloc_id();
+  int next_layer() const;
   void sync_next_id_from_entities();
   static std::string strip_copy_suffix(const std::string& name);
   static std::string unique_name(const std::vector<Entity2D>& existing,

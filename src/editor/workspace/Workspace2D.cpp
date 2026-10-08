@@ -58,18 +58,24 @@ void Workspace2D::reset_defaults() {
   player.layer = 5;
   entities_.push_back(player);
 
+  // A real 8x2 TileMap (32 px cells, 256x64 like the old placeholder):
+  // a grass top row over dirt so the seed scene shows painted tiles.
   Entity2D tilemap;
   tilemap.id = alloc_id();
   tilemap.name = "TileMap";
   tilemap.x = 0.0f;
   tilemap.y = 160.0f;
-  tilemap.w = 256.0f;
-  tilemap.h = 64.0f;
   tilemap.color[0] = 0.45f;
   tilemap.color[1] = 0.45f;
   tilemap.color[2] = 0.55f;
   tilemap.color[3] = 1.0f;
   tilemap.layer = 0;
+  tilemap.tilemap = TileMapData(8, 2, 32);
+  for (int c = 0; c < 8; ++c) {
+    tilemap.tilemap->set(c, 0, 4);  // Grass
+    tilemap.tilemap->set(c, 1, 1);  // Dirt
+  }
+  sync_tilemap_extent(tilemap);
   entities_.push_back(tilemap);
 
   select(player.id);

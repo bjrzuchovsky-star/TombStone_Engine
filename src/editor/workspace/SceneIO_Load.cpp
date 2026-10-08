@@ -1,6 +1,8 @@
 #include "editor/workspace/SceneIO.h"
 #include "editor/settings/JsonMini.h"
+#include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -80,8 +82,38 @@ std::optional<double> parse_number(std::string_view text, std::size_t& i) {
     return std::nullopt;
   }
 }
-std::optional<std::unordered_map<std::string, std::string>> parse_flat_object(
-    std::string_view text, std::size_t& i) {
+// Skip one bracketed value ([...] or {...}), honouring quoted strings so a
+// path like "a]b" cannot end the scan early. i must sit on the opener.
+bool skip_bracketed(std::string_view text, std::size_t& i) {
+  int depth = 0;
+  bool in_string = false;
+  while (i < text.size()) {
+    const char c = text[i++];
+    if (in_string) {
+      if (c == '\\') {
+        ++i;
+      } else if (c == '"') {
+        in_string = false;
+      }
+      continue;
+    }
+    if (c == '"') {
+      in_string = true;
+    } else if (c == '[' || c == '{') {
+      ++depth;
+    } else if (c == ']' || c == '}') {
+      if (--depth == 0) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+using FlatMap = std::unordered_map<std::string, std::string>;
+// Flat object of scalars. Nested objects are captured as raw JSON text in
+// *nested (key -> "{...}") when provided; arrays are skipped.
+std::optional<FlatMap> parse_flat_object(std::string_view text, std::size_t& i,
+                                         FlatMap* nested = nullptr) {
   if (!match_char(text, i, '{')) {
     return std::nullopt;
   }
@@ -107,27 +139,21 @@ std::optional<std::unordered_map<std::string, std::string>> parse_flat_object(
     } else if (auto n = parse_number(text, i)) {
       out.emplace(*key, format_number(*n));
     } else if (i < text.size() && text[i] == '[') {
-      int depth = 0;
-      do {
-        if (text[i] == '[') {
-          ++depth;
-        } else if (text[i] == ']') {
-          --depth;
-        }
-        ++i;
-      } while (i < text.size() && depth > 0);
+      if (!skip_bracketed(text, i)) {
+        return std::nullopt;
+      }
       out.emplace(*key, "");
     } else if (i < text.size() && text[i] == '{') {
-      int depth = 0;
-      do {
-        if (text[i] == '{') {
-          ++depth;
-        } else if (text[i] == '}') {
-          --depth;
-        }
-        ++i;
-      } while (i < text.size() && depth > 0);
+      const std::size_t start = i;
+      if (!skip_bracketed(text, i)) {
+        return std::nullopt;
+      }
+      if (nested) {
+        nested->emplace(*key, std::string(text.substr(start, i - start)));
+      }
       out.emplace(*key, "");
+    } else if (text.substr(i, 4) == "null") {
+      i += 4;
     } else {
       return std::nullopt;
     }
@@ -196,6 +222,72 @@ Entity2D entity_from_map(
   e.layer = static_cast<int>(map_number(map, "layer", 0.0));
   return e;
 }
+std::optional<FlatMap> parse_nested(const FlatMap& nested,
+                                    const std::string& key) {
+  const auto it = nested.find(key);
+  if (it == nested.end()) {
+    return std::nullopt;
+  }
+  std::size_t j = 0;
+  return parse_flat_object(it->second, j);
+}
+// v2 components: "tilemap": {cols, rows, tile_size, tileset, encoding, data}
+// and "sprite": {path, flip_x, flip_y, use_src, src_x/src_y/src_w/src_h}.
+bool apply_components(Entity2D& e, const FlatMap& nested, std::string* why) {
+  if (auto tm = parse_nested(nested, "tilemap")) {
+    TileMapData data;
+    data.cols = static_cast<int>(map_number(*tm, "cols", 1.0));
+    data.rows = static_cast<int>(map_number(*tm, "rows", 1.0));
+    data.tile_size = static_cast<int>(map_number(*tm, "tile_size", 32.0));
+    data.tileset = map_string(*tm, "tileset", "");
+    data.normalize();
+    const std::string encoding = map_string(*tm, "encoding", "rle");
+    if (encoding != "rle") {
+      if (why) *why = "unknown tilemap encoding '" + encoding + "'";
+      return false;
+    }
+    if (!tile_codec::decode_rle(map_string(*tm, "data", ""),
+                                data.tiles.size(), &data.tiles)) {
+      if (why) *why = "bad tilemap data";
+      return false;
+    }
+    e.tilemap = std::move(data);
+    Workspace2D::sync_tilemap_extent(e);
+  } else if (nested.count("tilemap")) {
+    if (why) *why = "bad tilemap object";
+    return false;
+  }
+  if (auto sp = parse_nested(nested, "sprite")) {
+    SpriteData s;
+    s.path = map_string(*sp, "path", "");
+    s.flip_x = map_bool(*sp, "flip_x", false);
+    s.flip_y = map_bool(*sp, "flip_y", false);
+    s.use_src_rect = map_bool(*sp, "use_src", false);
+    s.src_x = static_cast<int>(map_number(*sp, "src_x", 0.0));
+    s.src_y = static_cast<int>(map_number(*sp, "src_y", 0.0));
+    s.src_w = static_cast<int>(map_number(*sp, "src_w", 0.0));
+    s.src_h = static_cast<int>(map_number(*sp, "src_h", 0.0));
+    e.sprite = std::move(s);
+  } else if (nested.count("sprite")) {
+    if (why) *why = "bad sprite object";
+    return false;
+  }
+  return true;
+}
+// Version 1 scenes stored the seeded TileMap as a plain rect. Give any
+// "TileMap*" entity an empty 32 px grid covering its old rect so it can be
+// painted right away.
+void upgrade_v1_tilemaps(std::vector<Entity2D>& entities) {
+  for (Entity2D& e : entities) {
+    if (e.tilemap || e.name.rfind("TileMap", 0) != 0) {
+      continue;
+    }
+    const int cols = std::max(1, static_cast<int>(std::lround(e.w / 32.0f)));
+    const int rows = std::max(1, static_cast<int>(std::lround(e.h / 32.0f)));
+    e.tilemap = TileMapData(cols, rows, 32);
+    Workspace2D::sync_tilemap_extent(e);
+  }
+}
 }  // namespace
 bool load(Workspace2D& workspace, const std::string& scene_path,
           std::string* error_out) {
@@ -238,6 +330,7 @@ bool load(Workspace2D& workspace, const std::string& scene_path,
   std::optional<std::uint64_t> selected_id;
   std::vector<Entity2D> entities;
   bool saw_entities = false;
+  int version = 1;  // files without "version" predate v2
   skip_ws(text, i);
   if (match_char(text, i, '}')) {
     workspace.replace_scene(std::move(entities), selected_id, pan_x, pan_y,
@@ -265,7 +358,8 @@ bool load(Workspace2D& workspace, const std::string& scene_path,
       skip_ws(text, i);
       if (!match_char(text, i, ']')) {
         while (true) {
-          auto obj = parse_flat_object(text, i);
+          FlatMap nested;
+          auto obj = parse_flat_object(text, i, &nested);
           if (!obj) {
             if (error_out) {
               *error_out =
@@ -278,6 +372,14 @@ bool load(Workspace2D& workspace, const std::string& scene_path,
             if (error_out) {
               *error_out =
                   "Invalid scene.json (entity missing id/name): " + scene_path;
+            }
+            return false;
+          }
+          std::string why;
+          if (!apply_components(e, nested, &why)) {
+            if (error_out) {
+              *error_out = "Invalid scene.json (entity " + e.name + ": " +
+                           why + "): " + scene_path;
             }
             return false;
           }
@@ -404,12 +506,14 @@ bool load(Workspace2D& workspace, const std::string& scene_path,
         selected_id = static_cast<std::uint64_t>(*n + 0.5);
       }
     } else if (*key == "version") {
-      if (!parse_number(text, i)) {
+      auto n = parse_number(text, i);
+      if (!n) {
         if (error_out) {
           *error_out = "Invalid scene.json (version): " + scene_path;
         }
         return false;
       }
+      version = static_cast<int>(*n);
     } else {
       skip_ws(text, i);
       if (i < text.size() && text[i] == '"') {
@@ -418,26 +522,10 @@ bool load(Workspace2D& workspace, const std::string& scene_path,
         }
       } else if (parse_bool(text, i)) {
       } else if (parse_number(text, i)) {
-      } else if (i < text.size() && text[i] == '[') {
-        int depth = 0;
-        do {
-          if (text[i] == '[') {
-            ++depth;
-          } else if (text[i] == ']') {
-            --depth;
-          }
-          ++i;
-        } while (i < text.size() && depth > 0);
-      } else if (i < text.size() && text[i] == '{') {
-        int depth = 0;
-        do {
-          if (text[i] == '{') {
-            ++depth;
-          } else if (text[i] == '}') {
-            --depth;
-          }
-          ++i;
-        } while (i < text.size() && depth > 0);
+      } else if (i < text.size() && (text[i] == '[' || text[i] == '{')) {
+        if (!skip_bracketed(text, i)) {
+          return false;
+        }
       } else if (text.substr(i, 4) == "null") {
         i += 4;
       } else {
@@ -463,6 +551,9 @@ bool load(Workspace2D& workspace, const std::string& scene_path,
       *error_out = "Invalid scene.json (missing entities): " + scene_path;
     }
     return false;
+  }
+  if (version < 2) {
+    upgrade_v1_tilemaps(entities);
   }
   workspace.replace_scene(std::move(entities), selected_id, pan_x, pan_y, zoom,
                           show_grid);

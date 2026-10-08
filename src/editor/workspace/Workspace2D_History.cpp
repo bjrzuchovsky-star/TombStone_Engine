@@ -11,7 +11,8 @@ bool operator==(const Entity2D& a, const Entity2D& b) {
   return a.id == b.id && a.name == b.name && a.x == b.x && a.y == b.y &&
          a.w == b.w && a.h == b.h && a.color[0] == b.color[0] &&
          a.color[1] == b.color[1] && a.color[2] == b.color[2] &&
-         a.color[3] == b.color[3] && a.layer == b.layer;
+         a.color[3] == b.color[3] && a.layer == b.layer &&
+         a.tilemap == b.tilemap && a.sprite == b.sprite;
 }
 
 namespace {
@@ -93,6 +94,17 @@ bool Workspace2D::commit_edit() {
   std::string label = std::move(pending_label_);
   pending_label_.clear();
   return commit_step(std::move(label), std::move(before));
+}
+
+bool Workspace2D::revert_edit() {
+  if (!pending_) {
+    return false;
+  }
+  Snapshot before = std::move(*pending_);
+  pending_.reset();
+  pending_label_.clear();
+  restore(before);
+  return true;
 }
 
 void Workspace2D::cancel_edit() {

@@ -61,7 +61,9 @@ bool save(const Workspace2D& workspace, const std::string& scene_path,
   }
 
   out << "{\n";
-  out << "  \"version\": 1,\n";
+  // v2: optional per-entity "tilemap" / "sprite" objects. v1 files (no
+  // components) still load; see SceneIO_Load.cpp.
+  out << "  \"version\": " << kSceneVersion << ",\n";
   out << "  \"pan_x\": " << format_number(workspace.pan_x()) << ",\n";
   out << "  \"pan_y\": " << format_number(workspace.pan_y()) << ",\n";
   out << "  \"zoom\": " << format_number(workspace.zoom()) << ",\n";
@@ -99,7 +101,26 @@ bool save(const Workspace2D& workspace, const std::string& scene_path,
     out << "      \"g\": " << format_number(e.color[1]) << ",\n";
     out << "      \"b\": " << format_number(e.color[2]) << ",\n";
     out << "      \"a\": " << format_number(e.color[3]) << ",\n";
-    out << "      \"layer\": " << e.layer << "\n";
+    out << "      \"layer\": " << e.layer;
+    if (e.tilemap) {
+      const TileMapData& tm = *e.tilemap;
+      out << ",\n      \"tilemap\": {\"cols\": " << tm.cols
+          << ", \"rows\": " << tm.rows << ", \"tile_size\": " << tm.tile_size
+          << ", \"tileset\": \"" << escape_string(tm.tileset)
+          << "\", \"encoding\": \"rle\", \"data\": \""
+          << tile_codec::encode_rle(tm.tiles) << "\"}";
+    }
+    if (e.sprite) {
+      const SpriteData& sp = *e.sprite;
+      out << ",\n      \"sprite\": {\"path\": \"" << escape_string(sp.path)
+          << "\", \"flip_x\": " << (sp.flip_x ? "true" : "false")
+          << ", \"flip_y\": " << (sp.flip_y ? "true" : "false")
+          << ", \"use_src\": " << (sp.use_src_rect ? "true" : "false")
+          << ", \"src_x\": " << sp.src_x << ", \"src_y\": " << sp.src_y
+          << ", \"src_w\": " << sp.src_w << ", \"src_h\": " << sp.src_h
+          << "}";
+    }
+    out << "\n";
     out << "    }";
     if (idx + 1 < entities.size()) {
       out << ",";
