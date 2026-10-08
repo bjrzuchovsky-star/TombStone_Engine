@@ -1,6 +1,8 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <optional>
 #include <string>
 #include <vector>
@@ -20,6 +22,11 @@ struct Entity2D {
   float color[4] = {0.35f, 0.65f, 0.95f, 1.0f};  // RGBA tint
   int layer = 0;                                  // z-order (higher draws later)
 };
+
+bool operator==(const Entity2D& a, const Entity2D& b);
+inline bool operator!=(const Entity2D& a, const Entity2D& b) {
+  return !(a == b);
+}
 
 // Flat hierarchy under a conceptual root "Scene" node.
 // Persisted per project as scene.json via scene_io (load/save).
@@ -120,6 +127,52 @@ class Workspace2D {
   // Sorted copy of entity indices by layer ascending (stable by id).
   std::vector<std::size_t> sorted_draw_order() const;
 
+  // --- Undo / redo (in-memory, snapshot based) -----------------------------
+  // A snapshot is the entity list plus selection. Camera, grid and snap are
+  // view settings and are not part of history.
+  struct Snapshot {
+    std::vector<Entity2D> entities;
+    std::optional<std::uint64_t> selected_id;
+    std::vector<std::uint64_t> selection;
+  };
+  static constexpr std::size_t kMaxHistory = 200;
+
+  Snapshot snapshot() const;
+  // Restore entities + selection. Ids are never reused (next id only grows).
+  void restore(const Snapshot& s);
+  // True when the entity lists match field for field (selection ignored).
+  bool same_entities(const Snapshot& s) const;
+
+  // Push one committed step whose pre-edit state is `before`. Skipped when
+  // the entities did not change (selection-only changes are not steps).
+  // A pushed step clears the redo stack. Returns true if a step was pushed.
+  bool commit_step(std::string label, Snapshot before);
+
+  // Coalesced edit (drag, Inspector field, held-arrow nudge): begin captures
+  // the before-state once, later begins are ignored while open, commit pushes
+  // a single step for everything that changed in between.
+  void begin_edit(std::string label);
+  void begin_edit(std::string label, Snapshot before);
+  void set_edit_label(std::string label);
+  bool commit_edit();
+  void cancel_edit();  // drop the pending before-state (keeps current state)
+  bool edit_open() const { return pending_.has_value(); }
+  // Open and has actually changed entities (i.e. commit would push a step).
+  bool edit_changed() const { return pending_ && !same_entities(*pending_); }
+  const std::string& edit_label() const { return pending_label_; }
+
+  bool can_undo() const { return !undo_.empty(); }
+  bool can_redo() const { return !redo_.empty(); }
+  std::size_t undo_count() const { return undo_.size(); }
+  std::size_t redo_count() const { return redo_.size(); }
+  // Label of the step Undo / Redo would apply ("" when empty).
+  const std::string& undo_label() const;
+  const std::string& redo_label() const;
+  // Commits any open coalesced edit first. label_out receives the step name.
+  bool undo(std::string* label_out = nullptr);
+  bool redo(std::string* label_out = nullptr);
+  void clear_history();
+
  private:
   std::uint64_t alloc_id();
   void sync_next_id_from_entities();
@@ -135,6 +188,16 @@ class Workspace2D {
     float x;
     float y;
   };
+
+  struct HistoryStep {
+    std::string label;
+    Snapshot state;  // state to return to when this step is applied
+  };
+
+  std::deque<HistoryStep> undo_;
+  std::deque<HistoryStep> redo_;
+  std::optional<Snapshot> pending_;
+  std::string pending_label_;
 
   std::vector<Entity2D> entities_;
   std::optional<std::uint64_t> selected_id_;

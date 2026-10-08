@@ -5,6 +5,7 @@ add_library(ts_editor
   projects/ProjectStore.cpp
   projects/ProjectStore_Delete.cpp
   workspace/Workspace2D.cpp
+  workspace/Workspace2D_History.cpp
   workspace/SceneIO_Load.cpp
   workspace/SceneIO_Save.cpp
   ui/FolderBrowser.cpp
