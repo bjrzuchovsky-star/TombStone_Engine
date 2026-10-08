@@ -136,7 +136,7 @@ void Editor2DScreen::draw_viewport() {
         drag_mode_ = DragMode::Move;
       }
       if (drag_mode_ == DragMode::Move) {
-        workspace_.begin_move();
+        begin_drag_move();  // whole drag = one undo step
       }
     } else {
       drag_mode_ = DragMode::Marquee;
@@ -153,7 +153,7 @@ void Editor2DScreen::draw_viewport() {
     }
     if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
       if (drag_mode_ == DragMode::Move) {
-        workspace_.cancel_move();
+        cancel_drag_move();
         note("Move cancelled");
       }
       drag_mode_ = DragMode::None;
@@ -161,14 +161,10 @@ void Editor2DScreen::draw_viewport() {
   } else if (drag_mode_ != DragMode::None) {
     // Released (anywhere, even outside the canvas).
     if (drag_mode_ == DragMode::Move) {
-      const std::size_t n = workspace_.selection_count();
-      if (workspace_.end_move()) {
-        mark_dirty_and_autosave();
-        note(std::string("Moved ") + std::to_string(n) +
-             (n == 1 ? " entity" : " entities") +
-             (workspace_.snap_enabled() ? " (snapped)" : ""));
-      } else if (!drag_additive_ && !drag_moved_ && drag_hit_id_ != 0 &&
-                 workspace_.selection_count() > 1) {
+      // end_drag_move() commits one "Move N" undo step + autosaves.
+      const bool moved = end_drag_move();
+      if (!moved && !drag_additive_ && !drag_moved_ && drag_hit_id_ != 0 &&
+          workspace_.selection_count() > 1) {
         workspace_.select(drag_hit_id_);  // plain click on a group member
       }
     } else if (drag_mode_ == DragMode::Marquee) {

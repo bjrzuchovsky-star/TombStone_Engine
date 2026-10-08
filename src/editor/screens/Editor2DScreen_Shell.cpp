@@ -11,6 +11,7 @@
 #include <cstring>
 #include <iostream>
 #include <optional>
+#include <string>
 #include <vector>
 
 namespace ts {
@@ -50,6 +51,8 @@ void Editor2DScreen::setup_default_dock_layout(unsigned int dockspace_id) {
 namespace {
 
 constexpr float kGridPresets[] = {8.0f, 16.0f, 32.0f, 64.0f, 128.0f};
+// Arrow taps closer together than this share one "Nudge" undo step.
+constexpr double kNudgeCoalesceSeconds = 0.6;
 
 }  // namespace
 
@@ -58,6 +61,8 @@ void Editor2DScreen::draw_help_menu_contents() {
   ImGui::TextUnformatted("TombStone Admin -- 2D field kit");
   ImGui::PopStyleColor();
   ImGui::Separator();
+  theme::KeyHint("Ctrl+Z", "Undo");
+  theme::KeyHint("Ctrl+Y", "Redo (also Ctrl+Shift+Z)");
   theme::KeyHint("LMB drag", "Move selection");
   theme::KeyHint("Ctrl+click", "Add / remove from selection");
   theme::KeyHint("Shift+click", "Add (Hierarchy: range)");
@@ -116,10 +121,29 @@ void Editor2DScreen::draw_menu_bar() {
 
   if (ImGui::BeginMenu("Edit")) {
     const bool has_sel = workspace_.selection_count() > 0;
+    {
+      // Labels name the step ("Undo Move 3"); ### keeps the IDs stable.
+      const bool can_undo = workspace_.can_undo() || workspace_.edit_changed();
+      const bool can_redo = workspace_.can_redo();
+      const std::string& undo_name = workspace_.edit_changed()
+                                         ? workspace_.edit_label()
+                                         : workspace_.undo_label();
+      const std::string undo_text =
+          (can_undo ? "Undo " + undo_name : std::string("Undo")) +
+          "###EditUndo";
+      const std::string redo_text =
+          (can_redo ? "Redo " + workspace_.redo_label() : std::string("Redo")) +
+          "###EditRedo";
+      if (ImGui::MenuItem(undo_text.c_str(), "Ctrl+Z", false, can_undo)) {
+        undo();
+      }
+      if (ImGui::MenuItem(redo_text.c_str(), "Ctrl+Y", false, can_redo)) {
+        redo();
+      }
+      ImGui::Separator();
+    }
     if (ImGui::MenuItem("Create Entity")) {
-      cancel_rename();
-      workspace_.create_entity("Entity");
-      mark_dirty_and_autosave();
+      create_entity("Entity");
     }
     if (ImGui::MenuItem("Duplicate", "Ctrl+D", false, has_sel)) {
       duplicate_selected();
@@ -135,16 +159,11 @@ void Editor2DScreen::draw_menu_bar() {
       workspace_.clear_selection();
     }
     if (ImGui::MenuItem("Snap Selection to Grid", nullptr, false, has_sel)) {
-      if (workspace_.snap_selection_to_grid()) {
-        mark_dirty_and_autosave();
-        note("Snapped to grid");
-      }
+      snap_selected_to_grid();
     }
     ImGui::Separator();
     if (ImGui::MenuItem("Reset Scene Placeholders")) {
-      cancel_rename();
-      workspace_.reset_defaults();
-      mark_dirty_and_autosave();
+      reset_scene_placeholders();
     }
     ImGui::EndMenu();
   }
@@ -222,6 +241,41 @@ void Editor2DScreen::draw_toolbar() {
     dl->AddRectFilled(ImVec2(p.x, p.y + sz.y - 1.0f),
                       ImVec2(p.x + sz.x, p.y + sz.y),
                       theme::U32(theme::Copper(), 0.55f));
+  }
+
+  {
+    const bool can_undo = workspace_.can_undo() || workspace_.edit_changed();
+    const bool can_redo = workspace_.can_redo();
+    ImGui::BeginDisabled(!can_undo);
+    if (theme::SecondaryButton("Undo", ImVec2(56, 0))) {
+      undo();
+    }
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+      const std::string& l = workspace_.edit_changed()
+                                 ? workspace_.edit_label()
+                                 : workspace_.undo_label();
+      if (can_undo) {
+        ImGui::SetTooltip("Undo %s (Ctrl+Z)", l.c_str());
+      } else {
+        ImGui::SetTooltip("Nothing to undo (Ctrl+Z)");
+      }
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!can_redo);
+    if (theme::SecondaryButton("Redo", ImVec2(56, 0))) {
+      redo();
+    }
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+      if (can_redo) {
+        ImGui::SetTooltip("Redo %s (Ctrl+Y / Ctrl+Shift+Z)",
+                          workspace_.redo_label().c_str());
+      } else {
+        ImGui::SetTooltip("Nothing to redo (Ctrl+Y / Ctrl+Shift+Z)");
+      }
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine(0.0f, 18.0f);
   }
 
   bool grid = workspace_.show_grid();
@@ -382,6 +436,8 @@ void Editor2DScreen::draw_status_bar() {
 
 void Editor2DScreen::handle_hotkeys() {
   const ImGuiIO& io = ImGui::GetIO();
+  // A text field (Inspector Name, rename box, Ctrl+clicked drag field) keeps
+  // its own Ctrl+Z / Ctrl+Y and every other key.
   if (io.WantTextInput || renaming_) {
     return;
   }
@@ -389,6 +445,19 @@ void Editor2DScreen::handle_hotkeys() {
   const bool shift = io.KeyShift;
   const bool alt = io.KeyAlt;
   const bool scene_focus = viewport_focused_ || hierarchy_focused_;
+
+  // Undo / redo (with key repeat). Not mid-drag or while a widget is held.
+  if (drag_mode_ == DragMode::None && !ImGui::IsAnyItemActive()) {
+    const ImGuiKeyChord mods = io.KeyMods;
+    const bool z = ImGui::IsKeyPressed(ImGuiKey_Z, true);
+    const bool y = ImGui::IsKeyPressed(ImGuiKey_Y, true);
+    if (z && mods == ImGuiMod_Ctrl) {
+      undo();
+    } else if ((y && mods == ImGuiMod_Ctrl) ||
+               (z && mods == (ImGuiMod_Ctrl | ImGuiMod_Shift))) {
+      redo();
+    }
+  }
 
   if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_D)) {
     duplicate_selected();
@@ -453,6 +522,12 @@ void Editor2DScreen::handle_hotkeys() {
     nudge_pending_save_ = false;
     mark_dirty_and_autosave();
   }
+  // Held arrows (key repeat) and quick taps fold into one "Nudge" step; it
+  // commits once the keys are up and the coalesce window has passed.
+  if (edit_source_ == EditSource::Nudge && !arrows_held &&
+      now_seconds() - last_nudge_time_ > kNudgeCoalesceSeconds) {
+    flush_pending_edit();
+  }
 }
 
 void Editor2DScreen::draw_ui() {
@@ -515,6 +590,12 @@ void Editor2DScreen::draw_ui() {
   }
 
   handle_hotkeys();
+
+  // Safety net: an Inspector edit whose widget vanished (selection change,
+  // panel closed) without a deactivation still lands as one step.
+  if (edit_source_ == EditSource::Inspector && !ImGui::IsAnyItemActive()) {
+    end_inspector_edit();
+  }
 }
 
 

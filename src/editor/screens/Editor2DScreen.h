@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace ts {
 namespace tombstone {
@@ -41,6 +42,28 @@ class Editor2DScreen final : public IScreen {
   std::size_t duplicate_selected();  // Ctrl+D
   std::size_t delete_selected();     // Delete
   bool nudge_selected(int dir_x, int dir_y, bool large);  // arrows (+Shift)
+  std::uint64_t create_entity(std::string name = "Entity");
+  bool snap_selected_to_grid();
+  void reset_scene_placeholders();
+
+  // Undo / redo (Ctrl+Z, Ctrl+Y / Ctrl+Shift+Z, Edit menu, toolbar). Each
+  // restores entities + selection, autosaves scene.json and notes the step.
+  bool undo();
+  bool redo();
+
+  // Coalesced edits. These are what the viewport drag and Inspector widgets
+  // call; public so --smoke can drive the same paths without a window.
+  // Drag-move: one undo step per whole drag.
+  void begin_drag_move();
+  bool end_drag_move();     // commits "Move N" + autosave if anything moved
+  void cancel_drag_move();  // Esc: restore start positions, no step
+  // Inspector field: before-state captured on activation, one step on
+  // deactivation-after-edit.
+  void begin_inspector_edit(const char* label);
+  bool end_inspector_edit();
+  // Commit whatever coalesced edit is open (held-arrow nudge, drag,
+  // Inspector). Returns true if an undo step was pushed.
+  bool flush_pending_edit();
 
  private:
   void draw_ui();
@@ -58,6 +81,12 @@ class Editor2DScreen final : public IScreen {
   bool transform_field(const char* label, float* field, int slot, float vmin,
                        float vmax, bool is_extent);
   void note(std::string message);  // transient status-bar message
+  // Inspector widget hook: call right after the widget. Opens the coalesced
+  // edit on activation and commits it on deactivation.
+  void track_inspector_item(const char* label);
+  // Discrete edit helper: flush any coalesced edit, then snapshot.
+  Workspace2D::Snapshot prepare_edit();
+  double now_seconds() const;
   void setup_default_dock_layout(unsigned int dockspace_id);
 
   void begin_rename(std::uint64_t id);
@@ -97,6 +126,16 @@ class Editor2DScreen final : public IScreen {
   bool viewport_focused_ = false;
   bool hierarchy_focused_ = false;
   bool nudge_pending_save_ = false;  // autosave once arrows are released
+
+  // Which coalesced edit (if any) currently owns workspace_.edit_open().
+  enum class EditSource { None, Drag, Inspector, Nudge };
+  EditSource edit_source_ = EditSource::None;
+  double last_nudge_time_ = 0.0;
+  std::vector<std::uint64_t> nudge_selection_;  // who the open nudge moves
+  // Primary entity as it was at the top of this frame's Inspector, so an
+  // edit applied on the activation frame (color picker click) is undoable.
+  Entity2D insp_frame_entity_{};
+  bool insp_frame_valid_ = false;
 
   // Hierarchy shift-click range anchor (index into entities()).
   std::size_t range_anchor_ = 0;

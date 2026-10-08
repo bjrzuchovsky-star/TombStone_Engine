@@ -31,9 +31,7 @@ void Editor2DScreen::draw_hierarchy() {
                                     3.0f * ImGui::GetStyle().ItemSpacing.x) /
                                        4.0f);
   if (theme::PrimaryButton("+ New", ImVec2(bw, 0))) {
-    cancel_rename();
-    workspace_.create_entity("Entity");
-    mark_dirty_and_autosave();
+    create_entity("Entity");
   }
   const bool has_sel = workspace_.selection_count() > 0;
   ImGui::BeginDisabled(!has_sel);
@@ -168,7 +166,9 @@ void Editor2DScreen::draw_hierarchy() {
       delete_selected();
     } else if (delete_one) {
       cancel_rename();
+      Workspace2D::Snapshot before = prepare_edit();
       if (workspace_.delete_entity(*delete_one)) {
+        workspace_.commit_step("Delete 1", std::move(before));
         has_range_anchor_ = false;
         mark_dirty_and_autosave();
         note("Buried 1 entity");
@@ -225,13 +225,26 @@ bool Editor2DScreen::transform_field(const char* label, float* field, int slot,
       *field = is_extent ? workspace_.snap_extent(*field)
                          : workspace_.snap_value(*field);
     }
-    mark_dirty_and_autosave();
+    mark_dirty();
   }
+  // One undo step per field edit: opens on activation, commits (and
+  // autosaves) on deactivation.
+  char step[32];
+  std::snprintf(step, sizeof(step), "Edit %s", label);
+  track_inspector_item(step);
   return applied;
 }
 
 void Editor2DScreen::draw_inspector() {
   Entity2D* e = workspace_.selected();
+  // Remember the primary as it is before any widget touches it this frame;
+  // begin_inspector_edit() uses it as the before-state.
+  if (edit_source_ != EditSource::Inspector) {
+    insp_frame_valid_ = e != nullptr;
+    if (e) {
+      insp_frame_entity_ = *e;
+    }
+  }
   const std::size_t count = workspace_.selection_count();
   if (!e) {
     theme::SectionHeader("Inspector", "nothing selected");
@@ -267,9 +280,7 @@ void Editor2DScreen::draw_inspector() {
         mark_dirty();
       }
     }
-    if (ImGui::IsItemDeactivatedAfterEdit()) {
-      mark_dirty_and_autosave();
-    }
+    track_inspector_item("Rename");
 
     ImGui::SeparatorText(workspace_.snap_enabled() ? "Transform  [snap]"
                                                    : "Transform");
@@ -279,10 +290,7 @@ void Editor2DScreen::draw_inspector() {
     transform_field("H", &e->h, 3, 1.0f, 4096.0f, true);
     if (count > 1 || !workspace_.snap_enabled()) {
       if (theme::SecondaryButton("Snap selection to grid", ImVec2(-1, 0))) {
-        if (workspace_.snap_selection_to_grid()) {
-          mark_dirty_and_autosave();
-          note("Snapped to grid");
-        }
+        snap_selected_to_grid();
       }
     }
 
@@ -292,15 +300,11 @@ void Editor2DScreen::draw_inspector() {
                               ImGuiColorEditFlags_Float)) {
       mark_dirty();
     }
-    if (ImGui::IsItemDeactivatedAfterEdit()) {
-      mark_dirty_and_autosave();
-    }
+    track_inspector_item("Edit Tint");
     if (ImGui::InputInt("Layer / Z", &e->layer)) {
       mark_dirty();
     }
-    if (ImGui::IsItemDeactivatedAfterEdit()) {
-      mark_dirty_and_autosave();
-    }
+    track_inspector_item("Edit Layer");
   }
 
   ImGui::Spacing();

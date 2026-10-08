@@ -5,6 +5,7 @@
 #include <imgui.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -15,6 +16,14 @@
 namespace ts {
 namespace tombstone {
 namespace editor {
+
+namespace {
+
+std::string count_label(const char* verb, std::size_t n) {
+  return std::string(verb) + " " + std::to_string(n);
+}
+
+}  // namespace
 
 Editor2DScreen::Editor2DScreen(ProjectInfo project)
     : project_(std::move(project)) {}
@@ -33,6 +42,8 @@ void Editor2DScreen::on_enter() {
   nudge_pending_save_ = false;
   has_range_anchor_ = false;
   insp_drag_slot_ = -1;
+  edit_source_ = EditSource::None;
+  insp_frame_valid_ = false;
   status_note_.clear();
   dirty_ = false;
   scene_path_ = scene_io::scene_path_for_project(project_.path);
@@ -61,18 +72,26 @@ void Editor2DScreen::on_enter() {
     }
   }
 
+  workspace_.clear_history();  // history is per open project, in memory only
   std::cout << "[Editor2D] workspace for \"" << project_.name << "\" ("
             << to_string(project_.kind) << ") path=" << project_.path << '\n';
 }
 
 void Editor2DScreen::on_exit() {
   cancel_rename();
+  if (workspace_.move_active()) {
+    workspace_.cancel_move();
+    drag_mode_ = DragMode::None;
+  }
+  flush_pending_edit();
   if (dirty_ || !project_.path.empty()) {
     std::string err;
     if (!save_scene(&err) && !err.empty()) {
       std::cout << "[Editor2D] save on leave failed: " << err << '\n';
     }
   }
+  workspace_.clear_history();
+  edit_source_ = EditSource::None;
   std::cout << "[Editor2D] leaving workspace\n";
 }
 
@@ -116,12 +135,58 @@ void Editor2DScreen::note(std::string message) {
       ImGui::GetCurrentContext() != nullptr ? ImGui::GetTime() : 0.0;
 }
 
+double Editor2DScreen::now_seconds() const {
+  if (ImGui::GetCurrentContext() != nullptr) {
+    return ImGui::GetTime();
+  }
+  using clock = std::chrono::steady_clock;
+  return std::chrono::duration<double>(clock::now().time_since_epoch()).count();
+}
+
+Workspace2D::Snapshot Editor2DScreen::prepare_edit() {
+  flush_pending_edit();
+  return workspace_.snapshot();
+}
+
+bool Editor2DScreen::flush_pending_edit() {
+  const EditSource src = edit_source_;
+  edit_source_ = EditSource::None;
+  if (!workspace_.edit_open()) {
+    return false;
+  }
+  const bool pushed = workspace_.commit_edit();
+  if (pushed && src == EditSource::Nudge && nudge_pending_save_) {
+    // History step is in; make sure scene.json is too.
+    nudge_pending_save_ = false;
+    mark_dirty_and_autosave();
+  }
+  return pushed;
+}
+
+std::uint64_t Editor2DScreen::create_entity(std::string name) {
+  cancel_rename();
+  Workspace2D::Snapshot before = prepare_edit();
+  const std::uint64_t id = workspace_.create_entity(std::move(name));
+  if (id == 0) {
+    return 0;
+  }
+  workspace_.commit_step("Create Entity", std::move(before));
+  mark_dirty_and_autosave();
+  if (const Entity2D* e = workspace_.find(id)) {
+    note("Staked " + e->name);
+  }
+  return id;
+}
+
 std::size_t Editor2DScreen::duplicate_selected() {
   cancel_rename();
+  Workspace2D::Snapshot before = prepare_edit();
   const std::vector<std::uint64_t> ids = workspace_.duplicate_selection();
   if (ids.empty()) {
     return 0;
   }
+  workspace_.commit_step(count_label("Duplicate", ids.size()),
+                         std::move(before));
   mark_dirty_and_autosave();
   note("Duplicated " + std::to_string(ids.size()) +
        (ids.size() == 1 ? " entity" : " entities"));
@@ -134,22 +199,168 @@ std::size_t Editor2DScreen::delete_selected() {
     workspace_.cancel_move();
     drag_mode_ = DragMode::None;
   }
+  Workspace2D::Snapshot before = prepare_edit();
   const std::size_t n = workspace_.delete_selection();
   if (n == 0) {
     return 0;
   }
+  workspace_.commit_step(count_label("Delete", n), std::move(before));
   has_range_anchor_ = false;
   mark_dirty_and_autosave();
   note("Buried " + std::to_string(n) + (n == 1 ? " entity" : " entities"));
   return n;
 }
 
+bool Editor2DScreen::snap_selected_to_grid() {
+  Workspace2D::Snapshot before = prepare_edit();
+  if (!workspace_.snap_selection_to_grid()) {
+    return false;
+  }
+  workspace_.commit_step("Snap to Grid", std::move(before));
+  mark_dirty_and_autosave();
+  note("Snapped to grid");
+  return true;
+}
+
+void Editor2DScreen::reset_scene_placeholders() {
+  cancel_rename();
+  Workspace2D::Snapshot before = prepare_edit();
+  workspace_.reset_defaults();
+  workspace_.commit_step("Reset Scene", std::move(before));
+  has_range_anchor_ = false;
+  mark_dirty_and_autosave();
+  note("Scene reset to placeholders");
+}
+
 bool Editor2DScreen::nudge_selected(int dir_x, int dir_y, bool large) {
+  const double now = now_seconds();
+  // A different source, or a different set of entities, starts a new step.
+  if (edit_source_ != EditSource::Nudge ||
+      nudge_selection_ != workspace_.selection()) {
+    flush_pending_edit();
+  }
+  if (!workspace_.edit_open()) {
+    workspace_.begin_edit("Nudge");
+    edit_source_ = EditSource::Nudge;
+    nudge_selection_ = workspace_.selection();
+  }
+  last_nudge_time_ = now;
   if (!workspace_.nudge_selection(dir_x, dir_y, large)) {
     return false;
   }
+  workspace_.set_edit_label(count_label("Nudge", workspace_.selection_count()));
   mark_dirty();
   nudge_pending_save_ = true;  // flushed when the arrow keys are released
+  return true;
+}
+
+void Editor2DScreen::begin_drag_move() {
+  flush_pending_edit();
+  workspace_.begin_edit("Move");
+  edit_source_ = EditSource::Drag;
+  workspace_.begin_move();
+}
+
+bool Editor2DScreen::end_drag_move() {
+  const std::size_t n = workspace_.selection_count();
+  const bool moved = workspace_.end_move();
+  if (edit_source_ == EditSource::Drag) {
+    workspace_.set_edit_label(count_label("Move", n));
+    flush_pending_edit();
+  }
+  if (moved) {
+    mark_dirty_and_autosave();
+    note(std::string("Moved ") + std::to_string(n) +
+         (n == 1 ? " entity" : " entities") +
+         (workspace_.snap_enabled() ? " (snapped)" : ""));
+  }
+  return moved;
+}
+
+void Editor2DScreen::cancel_drag_move() {
+  workspace_.cancel_move();
+  if (edit_source_ == EditSource::Drag) {
+    workspace_.cancel_edit();
+    edit_source_ = EditSource::None;
+  }
+}
+
+void Editor2DScreen::begin_inspector_edit(const char* label) {
+  if (edit_source_ == EditSource::Inspector && workspace_.edit_open()) {
+    workspace_.set_edit_label(label);
+    return;
+  }
+  flush_pending_edit();
+  Workspace2D::Snapshot before = workspace_.snapshot();
+  // Swap in the primary as it was at the top of the frame, in case the
+  // widget already changed it on its activation frame.
+  if (insp_frame_valid_) {
+    for (Entity2D& e : before.entities) {
+      if (e.id == insp_frame_entity_.id) {
+        e = insp_frame_entity_;
+        break;
+      }
+    }
+  }
+  workspace_.begin_edit(label, std::move(before));
+  edit_source_ = EditSource::Inspector;
+}
+
+bool Editor2DScreen::end_inspector_edit() {
+  bool pushed = false;
+  if (edit_source_ == EditSource::Inspector) {
+    pushed = flush_pending_edit();
+  }
+  if (pushed || dirty_) {
+    mark_dirty_and_autosave();
+  }
+  return pushed;
+}
+
+void Editor2DScreen::track_inspector_item(const char* label) {
+  if (ImGui::IsItemActivated()) {
+    begin_inspector_edit(label);
+  }
+  if (ImGui::IsItemDeactivated()) {
+    end_inspector_edit();
+  }
+}
+
+bool Editor2DScreen::undo() {
+  if (drag_mode_ != DragMode::None) {
+    return false;  // mid-drag: finish or Esc first
+  }
+  cancel_rename();
+  flush_pending_edit();
+  std::string label;
+  if (!workspace_.undo(&label)) {
+    note("Nothing to undo. Trail's clean.");
+    return false;
+  }
+  has_range_anchor_ = false;
+  insp_drag_slot_ = -1;
+  nudge_pending_save_ = false;
+  mark_dirty_and_autosave();
+  note("Undid: " + label);
+  return true;
+}
+
+bool Editor2DScreen::redo() {
+  if (drag_mode_ != DragMode::None) {
+    return false;
+  }
+  cancel_rename();
+  flush_pending_edit();
+  std::string label;
+  if (!workspace_.redo(&label)) {
+    note("Nothing to redo. End of the trail.");
+    return false;
+  }
+  has_range_anchor_ = false;
+  insp_drag_slot_ = -1;
+  nudge_pending_save_ = false;
+  mark_dirty_and_autosave();
+  note("Redid: " + label);
   return true;
 }
 
@@ -174,7 +385,9 @@ void Editor2DScreen::commit_rename() {
     name.pop_back();
   }
   if (!name.empty()) {
+    Workspace2D::Snapshot before = prepare_edit();
     if (workspace_.rename_entity(rename_id_, std::move(name))) {
+      workspace_.commit_step("Rename", std::move(before));
       mark_dirty_and_autosave();
     }
   }
