@@ -7,6 +7,8 @@ add_library(ts_runtime
   World_Collision.cpp
   World_Anim.cpp
   PlaySession.cpp
+  Script.cpp
+  ScriptApi.cpp
 )
 
 target_include_directories(ts_runtime
