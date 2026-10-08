@@ -15,12 +15,19 @@ add_subdirectory(src/input)
 add_subdirectory(src/net)
 add_subdirectory(src/physics)
 add_subdirectory(src/scene)
+# Game runtime (World, fixed-step PlaySession). Pure C++, always built.
+add_subdirectory(src/runtime)
 
-# Editor / Admin UI module (screens + AppFlow). Admin-only for now.
-# ImGui + GLFW are fetched only when TS_BUILD_ADMIN is ON so client/game
-# stay free of those dependencies.
-if(TS_BUILD_ADMIN)
+# Windowed apps: GLFW + OpenGL + stb_image for ts_admin and ts_game (ts_gfx:
+# texture cache + GL helpers). Dear ImGui is fetched only for the Admin.
+# Client builds stay free of all of it.
+if(TS_BUILD_ADMIN OR TS_BUILD_GAME)
   include(FetchImGuiDeps)
+  add_subdirectory(src/gfx)
+endif()
+
+# Editor / Admin UI module (screens + AppFlow). Admin-only.
+if(TS_BUILD_ADMIN)
   add_subdirectory(src/editor)
   add_subdirectory(apps/admin)
 endif()

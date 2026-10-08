@@ -1,6 +1,9 @@
-# Fetch GLFW + Dear ImGui (docking) for the Admin editor only.
+# Fetch the windowed-app dependencies:
+#   GLFW + OpenGL + stb_image   -> ts_admin and ts_game (TS_BUILD_ADMIN or
+#                                  TS_BUILD_GAME)
+#   Dear ImGui (docking)        -> ts_admin only (TS_BUILD_ADMIN)
 # Sources are downloaded into the CMake build tree (_deps); they are NOT
-# committed to this repository. Client/Game builds never include this file.
+# committed to this repository. Client builds never include this file.
 
 include(FetchContent)
 
@@ -19,61 +22,63 @@ FetchContent_Declare(
   GIT_SHALLOW    TRUE
 )
 
-# Docking branch tip kept lean via shallow clone. Pin a v*-docking tag later
-# if you need bit-identical dependency trees across machines.
-FetchContent_Declare(
-  imgui
-  GIT_REPOSITORY https://github.com/ocornut/imgui.git
-  GIT_TAG        docking
-  GIT_SHALLOW    TRUE
-)
-
 FetchContent_MakeAvailable(glfw)
 
-FetchContent_GetProperties(imgui)
-if(NOT imgui_POPULATED)
-  FetchContent_Populate(imgui)
-endif()
-
-# imgui has no library target of its own; build core + GLFW/OpenGL3 backends.
-# imgui_impl_opengl3 embeds a small GL loader (no separate glad required).
-add_library(ts_imgui STATIC
-  ${imgui_SOURCE_DIR}/imgui.cpp
-  ${imgui_SOURCE_DIR}/imgui_draw.cpp
-  ${imgui_SOURCE_DIR}/imgui_tables.cpp
-  ${imgui_SOURCE_DIR}/imgui_widgets.cpp
-  ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
-  ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
-)
-
-add_library(ts::imgui ALIAS ts_imgui)
-
-target_include_directories(ts_imgui
-  PUBLIC
-    ${imgui_SOURCE_DIR}
-    ${imgui_SOURCE_DIR}/backends
-)
-
 find_package(OpenGL REQUIRED)
-
-target_link_libraries(ts_imgui
-  PUBLIC
-    glfw
-    OpenGL::GL
-)
-
-target_compile_features(ts_imgui PUBLIC cxx_std_20)
-target_compile_definitions(ts_imgui
-  PUBLIC
-    TS_HAS_IMGUI=1
-)
 
 # Windows: glfw links the right system libs via its own CMake.
 # Linux: needs X11 + OpenGL development packages at configure time.
 
-# stb_image (single header, public domain / MIT dual license) for the Admin
-# editor's sprite + tileset loading. Pinned to one commit and checked by
-# hash; only the header is downloaded (nothing is committed here).
+if(TS_BUILD_ADMIN)
+  # Docking branch tip kept lean via shallow clone. Pin a v*-docking tag later
+  # if you need bit-identical dependency trees across machines.
+  FetchContent_Declare(
+    imgui
+    GIT_REPOSITORY https://github.com/ocornut/imgui.git
+    GIT_TAG        docking
+    GIT_SHALLOW    TRUE
+  )
+
+  FetchContent_GetProperties(imgui)
+  if(NOT imgui_POPULATED)
+    FetchContent_Populate(imgui)
+  endif()
+
+  # imgui has no library target of its own; build core + GLFW/OpenGL3 backends.
+  # imgui_impl_opengl3 embeds a small GL loader (no separate glad required).
+  add_library(ts_imgui STATIC
+    ${imgui_SOURCE_DIR}/imgui.cpp
+    ${imgui_SOURCE_DIR}/imgui_draw.cpp
+    ${imgui_SOURCE_DIR}/imgui_tables.cpp
+    ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
+  )
+
+  add_library(ts::imgui ALIAS ts_imgui)
+
+  target_include_directories(ts_imgui
+    PUBLIC
+      ${imgui_SOURCE_DIR}
+      ${imgui_SOURCE_DIR}/backends
+  )
+
+  target_link_libraries(ts_imgui
+    PUBLIC
+      glfw
+      OpenGL::GL
+  )
+
+  target_compile_features(ts_imgui PUBLIC cxx_std_20)
+  target_compile_definitions(ts_imgui
+    PUBLIC
+      TS_HAS_IMGUI=1
+  )
+endif()  # TS_BUILD_ADMIN
+
+# stb_image (single header, public domain / MIT dual license) for sprite +
+# tileset loading in the editor and ts_game. Pinned to one commit and
+# checked by hash; only the header is downloaded (nothing is committed).
 set(TS_STB_COMMIT 2c980bb59875b0d32144a71867fbdebb2f77cd20)
 FetchContent_Declare(
   ts_stb_image
@@ -85,6 +90,6 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(ts_stb_image)
 
 # Header-only interface target; the implementation is compiled once in
-# src/editor/assets/StbImageImpl.cpp.
+# src/gfx/StbImageImpl.cpp.
 add_library(ts_stb_image INTERFACE)
 target_include_directories(ts_stb_image INTERFACE ${ts_stb_image_SOURCE_DIR})
