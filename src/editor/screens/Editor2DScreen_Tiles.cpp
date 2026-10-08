@@ -325,8 +325,19 @@ std::uint64_t Editor2DScreen::create_sprite_at(const std::string& rel_path,
   }
   cancel_rename();
   const TextureInfo& tex = texture(rel_path);
-  const float w = tex.ok ? static_cast<float>(tex.width) : 64.0f;
-  const float h = tex.ok ? static_cast<float>(tex.height) : 64.0f;
+  float w = tex.ok ? static_cast<float>(tex.width) : 64.0f;
+  float h = tex.ok ? static_cast<float>(tex.height) : 64.0f;
+  // A sheet with a .anim.json beside it rides in animated, one frame big.
+  const std::string set_rel = anim_set_for_image(rel_path);
+  const AnimLibrary::Entry* anim = set_rel.empty() ? nullptr : anim_entry(set_rel);
+  const AnimClip* first =
+      anim && anim->ok ? anim->set.find(anim->set.start_clip()) : nullptr;
+  AnimRect frame;
+  if (first) {
+    frame = anim->set.frame_rect(*first, 0);
+    w = static_cast<float>(frame.w);
+    h = static_cast<float>(frame.h);
+  }
   Workspace2D::Snapshot before = prepare_edit();
   std::string name = assets::file_stem(rel_path);
   const std::uint64_t id = workspace_.create_sprite_entity(
@@ -335,9 +346,24 @@ std::uint64_t Editor2DScreen::create_sprite_at(const std::string& rel_path,
   if (id == 0) {
     return 0;
   }
-  commit_discrete(std::move(before), "Create Sprite",
+  if (first) {
+    Entity2D* e = workspace_.find(id);
+    e->sprite->use_src_rect = true;  // first frame when the set goes missing
+    e->sprite->src_x = frame.x;
+    e->sprite->src_y = frame.y;
+    e->sprite->src_w = frame.w;
+    e->sprite->src_h = frame.h;
+    e->animator = AnimatorData{};
+    e->animator->set = set_rel;
+  }
+  commit_discrete(std::move(before),
+                  first ? "Create Animated Sprite" : "Create Sprite",
                   "Staked " + workspace_.find(id)->name +
-                      (tex.ok ? std::string() : std::string(" (image missing)")));
+                      (first ? " (animated, " +
+                                   std::to_string(anim->set.clips.size()) +
+                                   " clips)"
+                       : tex.ok ? std::string()
+                                : std::string(" (image missing)")));
   return id;
 }
 
