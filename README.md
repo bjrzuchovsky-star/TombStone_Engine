@@ -86,15 +86,17 @@ Major systems are being rebuilt and optimized as part of the current engine iter
 ```
 CMakeLists.txt          # Root: TombStoneEngine, C++20, TS_BUILD_* options
 cmake/                  # Shared CMake helpers (TombStoneOptions.cmake)
-src/core/               # Engine core (types, assert, Engine)
+src/core/               # Engine core (types, assert, Engine, JsonMini)
 src/platform/           # Platform / window stubs
 src/render/             # Renderer stubs
 src/input/              # Input stubs
 src/net/                # Networking stubs (4-player MMO target later)
 src/physics/            # 2D physics stubs
-src/scene/              # Scene stubs
-src/editor/             # Admin UI (AppFlow, settings, projects, workspace/SceneIO + TileMap, assets/TextureCache, ui, screens)
-cmake/FetchImGuiDeps.cmake  # FetchContent GLFW + Dear ImGui (admin only)
+src/scene/              # Scene data: Entity2D + components, TileMap, scene.json read/write (no UI, no GL)
+src/runtime/            # Game runtime: World, PlaySession (60 Hz fixed step), abstract input (no UI, no GL)
+src/gfx/                # stb_image TextureCache + OpenGL texture uploader (admin + game)
+src/editor/             # Admin UI (AppFlow, settings, projects, workspace, Play mode, launcher, ui, screens)
+cmake/FetchImGuiDeps.cmake  # FetchContent GLFW + stb_image (admin + game) and Dear ImGui (admin only)
 apps/admin|client|game/ # Build targets controlled by TS_BUILD_*
 ```
 
@@ -106,11 +108,11 @@ apps/admin|client|game/ # Build targets controlled by TS_BUILD_*
 2. **Login** -- username/password, Login, Dev login, Settings  
 3. **ProjectManager** -- list projects, Open / double-click, New 2D (validated name), Settings, Logout; errors shown in-UI  
 4. **Settings** -- edit `projects_root` (Browse opens an in-app ImGui folder picker), theme, `auto_login_dev`, username; Apply/Save still validates, writes settings, and reloads projects  
-5. **Editor2D** -- live Hierarchy (create/duplicate/rename/delete, multi-select), Viewport2D canvas (drag-to-move, box select, snap-to-grid, pan MMB/RMB/Alt-drag, wheel zoom), Inspector (name, snapped transform, color/tint, layer/z, TileMap / Sprite sections) + Back, **Tile Palette** (tilemap painting) and **Supply Wagon** (project images); File → Save Scene  
+5. **Editor2D** -- live Hierarchy (create/duplicate/rename/delete, multi-select), Viewport2D canvas (drag-to-move, box select, snap-to-grid, pan MMB/RMB/Alt-drag, wheel zoom), Inspector (name, snapped transform, color/tint, layer/z, TileMap / Sprite / Player / Camera2D / Spawn Point sections) + Back, **Tile Palette** (tilemap painting) and **Supply Wagon** (project images); File → Save Scene; **Play / Pause / Stop** runs the scene in the Viewport  
 
 Namespace: `ts::tombstone::editor`.
 
-**Editor2D workspace** loads/saves `<project>/scene.json` (entities: id/name, x/y/w/h, rgba tint, layer/z, optional `tilemap` / `sprite` objects, plus pan/zoom/grid, `grid_size`, `snap`, `selection`; older files without the new keys still load). Opening a 2D project loads scene.json when present, otherwise seeds Camera2D / Player / TileMap and writes an initial scene.json. Hierarchy/Inspector edits autosave; leaving the editor (Back / Quit) also saves. Hierarchy edits and Inspector fields update the viewport immediately. **Settings → Browse...** uses a portable ImGui directory browser (no extra native deps); Apply remains the step that validates/writes `projects_root` and reloads the project list.
+**Editor2D workspace** loads/saves `<project>/scene.json` (entities: id/name, x/y/w/h, rgba tint, layer/z, optional `tilemap` / `sprite` / `player` / `camera` / `spawn` objects, plus pan/zoom/grid, `grid_size`, `snap`, `selection`; older files without the new keys still load). Opening a 2D project loads scene.json when present, otherwise seeds Camera2D / Player / TileMap and writes an initial scene.json. Hierarchy/Inspector edits autosave; leaving the editor (Back / Quit) also saves. Hierarchy edits and Inspector fields update the viewport immediately. **Settings → Browse...** uses a portable ImGui directory browser (no extra native deps); Apply remains the step that validates/writes `projects_root` and reloads the project list.
 
 
 ### UI identity (Admin shell)
@@ -165,24 +167,66 @@ Images live in `<project>/assets/` (created when a project is made or opened). T
 
 Any non-TileMap entity can carry a sprite: project-relative image path, optional source rect (x/y/w/h, 0 = to the edge), flip X/Y, tinted by the entity colour (**White tint** shows the image as drawn). The viewport draws the textured quad (nearest filtering) instead of the rect; a missing or unreadable file falls back to the tinted rect with an amber "!" marker and a tooltip. Sprite assignment, removal, flips, source rect, new sprite entities and "Fit to image" are all undoable.
 
-Images are decoded with [stb_image](https://github.com/nothings/stb) (public domain / MIT, fetched at configure time for admin builds, pinned by commit + SHA-256). Decoding and caching (`src/editor/assets/TextureCache`) are renderer-agnostic: the admin app registers an OpenGL uploader, while `--smoke` runs headless and only reads image sizes. The cache keys by path and reloads a file when it changes on disk.
+Images are decoded with [stb_image](https://github.com/nothings/stb) (public domain / MIT, fetched at configure time for admin builds, pinned by commit + SHA-256). Decoding and caching (`src/gfx/TextureCache`) are renderer-agnostic: the admin app registers an OpenGL uploader, while `--smoke` runs headless and only reads image sizes. The cache keys by path and reloads a file when it changes on disk.
+
+### Play mode (run the game inside the editor)
+
+Hit **Play** and the scene rides: the Viewport stops being an editing canvas and runs the real game runtime on a snapshot of the scene. **Stop** throws the run away and puts the editor back exactly as it was: entities, selection, camera, undo history. Nothing done while playing writes `scene.json` or adds an undo step.
+
+| Action | Input |
+|---|---|
+| Play / Stop | F5 or Ctrl+P (toolbar Play / Stop, Play menu) |
+| Pause / resume | F6 (toolbar Pause) |
+| Step one tick (paused) | F10 (toolbar Step) |
+| Move player 1 | WASD or arrow keys; gamepad left stick / d-pad |
+| Gamepads | pads 1-4 drive player slots 1-4 (pad 1 shares slot 1 with the keyboard) |
+| Free camera | C toggles; drag to pan, wheel to zoom (C again hands back to the follow cam) |
+| Launch Game | toolbar Launch / File menu: saves, then starts `ts_game` on this project |
+
+While riding the viewport gets a copper frame and a `RIDING mm:ss tick N` badge (amber `PAUSED` and a dimmed scene while held); the status bar shows the play clock, tick count, measured ticks/s, player 1's position and the camera mode. Edit tools, the Hierarchy, Inspector, Tile Palette and Supply Wagon are locked, and Save is refused with a note. **Esc never ends a ride**: only F5 / Ctrl+P / Stop do. Play flushes any half-finished edit and autosaves first, so `ts_game` and Play see the same scene.
+
+Gameplay components are edited in the Inspector (each change is one undo step):
+
+- **Player**: player slot P1-P4 and speed (px/s). Movement is 8-way; diagonals are not faster.
+- **Camera2D**: follow target, smoothing (seconds; 0 = locked on), zoom, optional bounds rect (**Fit to TileMap**). With no Camera2D the game follows player 1.
+- **Spawn Point**: the player in this slot starts centred on it.
+
+New projects seed **Player** with a P1 controller and **Camera2D** following it.
+
+### ts_game (the standalone game)
+
+```bash
+./build/apps/game/ts_game --project ./build/apps/admin/TombStoneProjects/sample-2d-platformer
+./build/apps/game/ts_game --smoke --project <dir>    # headless: load, ride 60 ticks, verify, exit
+```
+
+`ts_game` opens its own GLFW window (1280x720, resizable), loads `<project>/scene.json` and its images through the runtime, and draws tilemaps and sprites with a small fixed-function OpenGL renderer (no ImGui, no editor code). Keys: WASD / arrows (and gamepads 1-4) ride, P or F6 pause, F10 step while paused, R or F5 reload `scene.json` from disk, Esc quit. The editor's **Launch Game** finds `ts_game` next to `ts_admin` or in the build tree (`build/apps/game/`); if it isn't built it says so (configure with `-DTS_BUILD_GAME=ON`).
+
+**Runtime architecture.** `src/scene` owns the data (Entity2D and its optional components, tilemaps, the scene.json reader/writer) and `src/runtime` owns the game: a `World` built from a copy of the entities, advanced by a `PlaySession` at a fixed 60 Hz (accumulator, at most 8 catch-up ticks per frame) from an abstract per-player `InputFrame` (move x/y + action buttons for slots 0-3), with a follow camera and a renderer-neutral draw list (world-space quads + UVs) interpolated between ticks. Neither library knows about ImGui or OpenGL: the editor feeds it keyboard/gamepad input and draws the list with ImGui, `ts_game` feeds GLFW input and draws it with OpenGL, and `--smoke` feeds scripted input. Collision, animation, scripting and networked players (a local server plus up to four clients) slot in as more per-tick systems and more `InputFrame` sources without touching the editor.
 
 ### scene.json format
 
-`"version": 2` adds two optional per-entity objects (version 1 files still load; a v1 entity named `TileMap*` becomes an empty 32 px grid covering its old rect):
+`"version": 3` (current). Every entity has id/name, x/y/w/h, r/g/b/a and layer, plus optional component objects. Version 2 added `tilemap` and `sprite`; version 3 adds the gameplay components `player`, `camera` and `spawn`:
 
 ```json
 "tilemap": {"cols": 8, "rows": 2, "tile_size": 32, "tileset": "", "encoding": "rle", "data": "8*4,8*1"},
-"sprite": {"path": "assets/rider.png", "flip_x": false, "flip_y": false, "use_src": false, "src_x": 0, "src_y": 0, "src_w": 0, "src_h": 0}
+"sprite": {"path": "assets/rider.png", "flip_x": false, "flip_y": false, "use_src": false, "src_x": 0, "src_y": 0, "src_w": 0, "src_h": 0},
+"player": {"slot": 0, "speed": 160},
+"camera": {"target": 2, "smoothing": 0.15, "zoom": 1, "use_bounds": false, "bounds_x": 0, "bounds_y": 0, "bounds_w": 1024, "bounds_h": 768},
+"spawn": {"slot": 0}
 ```
+
+Older files still load: a v1 entity named `TileMap*` becomes an empty 32 px grid covering its old rect, and a v1/v2 scene with no gameplay components gets a P1 controller on the entity named `Player` and a follow camera on `Camera2D` (targeting Player), so old projects play straight away. The file is written as v3 on the next save.
 
 `data` is row-major run-length text: comma-separated `count*id` runs (a single cell is just `id`).
 
-`--smoke` (headless, no GL) paints a multi-cell stroke and checks it is one undo step, a 2x2 brush, erase, a cancelled stroke, bucket fill, rect fill/erase, eyedropper, resize (keeps tiles; undo restores cut cells), tile size, undo-all / redo-all with `scene.json` in sync, the v2 RLE roundtrip, the v1 upgrade, sprite drop-create / assign / flip / source-rect roundtrip with undo/redo, missing and corrupt image fallbacks, tileset slicing, and import.
+`--smoke` also runs the runtime headless: scripted input moves the player exactly speed x time at 60 Hz (diagonals clamped), the camera follows and respects bounds, spawn points place riders, pause holds the world and step runs exactly one tick, Play -> Stop in the editor restores the workspace byte-for-byte with undo history and `scene.json` (bytes and mtime) untouched, edit tools are locked while playing, and a v2 project opens as v3 and plays.
+
+The editor `--smoke` also paints a multi-cell stroke and checks it is one undo step, a 2x2 brush, erase, a cancelled stroke, bucket fill, rect fill/erase, eyedropper, resize (keeps tiles; undo restores cut cells), tile size, undo-all / redo-all with `scene.json` in sync, the v2 RLE roundtrip, the v1 upgrade, sprite drop-create / assign / flip / source-rect roundtrip with undo/redo, missing and corrupt image fallbacks, tileset slicing, and import.
 
 ### Building admin with ImGui
 
-Admin pulls **GLFW 3.4**, **Dear ImGui (docking branch)** and the single **stb_image.h** header via CMake `FetchContent` (`cmake/FetchImGuiDeps.cmake`). Downloaded sources live under the build directory (`build/_deps/...`) and are gitignored — they are **not** committed.
+Admin pulls **GLFW 3.4**, **Dear ImGui (docking branch)** and the single **stb_image.h** header via CMake `FetchContent` (`cmake/FetchImGuiDeps.cmake`); `ts_game` uses the same GLFW and stb_image (no ImGui). Downloaded sources live under the build directory (`build/_deps/...`) and are gitignored — they are **not** committed.
 
 Requirements (in addition to C++20):
 
@@ -192,12 +236,13 @@ Requirements (in addition to C++20):
 
 ```bash
 cmake -S . -B build -DTS_BUILD_ADMIN=ON -DTS_BUILD_CLIENT=ON -DTS_BUILD_GAME=ON
-cmake --build build --target ts_admin
+cmake --build build --target ts_admin ts_game
 ./build/apps/admin/ts_admin          # GUI
 ./build/apps/admin/ts_admin --smoke  # headless flow smoke (no window, no GL)
+./build/apps/game/ts_game --smoke --project <dir>
 ```
 
-Client/Game do **not** fetch or link ImGui/GLFW. Building with `-DTS_BUILD_ADMIN=OFF` skips `src/editor` and the FetchContent deps entirely.
+Only Admin fetches and links ImGui; Client fetches nothing. `-DTS_BUILD_ADMIN=OFF` skips `src/editor` and ImGui; with Admin and Game both off, no FetchContent deps are pulled at all.
 
 ### Projects & settings (on disk)
 
