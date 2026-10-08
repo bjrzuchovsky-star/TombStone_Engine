@@ -1,6 +1,7 @@
 #include "SmokeRuntime.h"
 
 #include "SmokeAnimation.h"
+#include "SmokeScripting.h"
 #include "SmokeCollision.h"
 
 #include "editor/ProjectInfo.h"
@@ -554,5 +555,8 @@ int run_runtime_smoke() {
   if (run_collision_smoke() != 0) {
     return 1;
   }
-  return run_animation_smoke();
+  if (run_animation_smoke() != 0) {
+    return 1;
+  }
+  return run_scripting_smoke();
 }
