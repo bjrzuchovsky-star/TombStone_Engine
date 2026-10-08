@@ -350,6 +350,10 @@ void Editor2DScreen::draw_inspector() {
     if (workspace_.find(eid)) {
       draw_inspector_gameplay(eid);
     }
+    // Animator (idle / walk clips from a .anim.json).
+    if (workspace_.find(eid)) {
+      draw_inspector_animator(eid);
+    }
     e = workspace_.find(eid);
   }
 

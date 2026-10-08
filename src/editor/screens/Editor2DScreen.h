@@ -6,6 +6,7 @@
 #include "editor/ui/FolderBrowser.h"
 #include "editor/workspace/Workspace2D.h"
 #include "runtime/PlaySession.h"
+#include "scene/Animation.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -35,6 +36,18 @@ void draw_solid_marker(ImDrawList* draw, const ImVec2& p0, const ImVec2& p1);
 
 // How a sprite entity will draw this frame.
 enum class SpriteState { None, Ready, Missing };
+
+// What an entity shows in the edit viewport: a texture and its UVs (the
+// sprite's source rect, or the animator's current frame). flip already
+// applied (u0 > u1 when mirrored).
+struct EntityImage {
+  const TextureInfo* texture = nullptr;
+  float u0 = 0.0f;
+  float v0 = 0.0f;
+  float u1 = 1.0f;
+  float v1 = 1.0f;
+  bool animated = false;  // the frame comes from an animation set
+};
 
 // 2D editor workspace: Hierarchy list, Viewport2D canvas, Inspector
 // properties, Tile Palette and Supply Wagon (assets) panels.
@@ -162,6 +175,47 @@ class Editor2DScreen final : public IScreen {
   // False (with a status note) when ts_game is not built or will not start.
   bool launch_game();
 
+  // --- Animation (Editor2DScreen_Anim.cpp) ------------------------------------
+  // Animator component: add / edit / remove (nullopt) is one undo step and
+  // autosaves scene.json, like every other component.
+  bool set_animator(std::uint64_t id, std::optional<AnimatorData> animator,
+                    const std::string& label = "Edit Animator");
+  // Sets read from <project>/ for the Inspector, previews and the Stable.
+  AnimLibrary& anim_library() { return anim_lib_; }
+  const AnimLibrary::Entry* anim_entry(const std::string& set_rel);
+  // Edit mode: animators play their default clip in the viewport (View >
+  // Preview Animations). Off = they rest on its first frame.
+  bool anim_preview() const { return anim_preview_; }
+  void set_anim_preview(bool on) { anim_preview_ = on; }
+  // Image for an entity in edit mode at `seconds` (animators sample their
+  // default clip; plain sprites their source rect). False when nothing can
+  // be drawn (no image, or it is missing).
+  bool entity_image(const Entity2D& e, double seconds, EntityImage* out);
+  // The .anim.json beside an image ("" when there is none on disk).
+  std::string anim_set_for_image(const std::string& image_rel) const;
+
+  // Stable: the animation-set panel. Edits save straight to the .anim.json
+  // next to the sheet (no undo step; scene.json is not involved) and every
+  // animator using the set picks them up.
+  // Open a sheet image or a .anim.json. A sheet without a set starts a new,
+  // unsaved one (one 32 px grid, no clips) that the first edit writes.
+  bool stable_open(const std::string& rel);
+  const std::string& stable_path() const { return stable_path_; }
+  const AnimSet& stable_set() const { return stable_set_; }
+  std::string stable_image() const;  // project-relative sheet path
+  bool stable_saved() const { return stable_saved_; }
+  // Normalize, write the .anim.json and refresh the library.
+  bool stable_apply(AnimSet set, const std::string& note_text);
+  bool stable_slice(int frame_w, int frame_h);  // fit cols / rows to the sheet
+  int stable_add_clip(const std::string& name, int start, int count);  // index
+  bool stable_rename_clip(int index, const std::string& name);
+  bool stable_delete_clip(int index);
+  bool stable_set_range(int index, int start, int count);
+  bool stable_set_timing(int index, float fps, AnimMode mode);
+  bool stable_set_default(const std::string& clip);
+  int stable_clip() const { return stable_clip_; }
+  void stable_select_clip(int index);
+
   // --- Collision (Editor2DScreen_Collision.cpp) -------------------------------
   // Tile solidity per tileset ("" = built-in palette). Each toggle is one
   // undo step ("Solid: Stone") and autosaves scene.json "tile_solidity".
@@ -198,6 +252,10 @@ class Editor2DScreen final : public IScreen {
   void draw_play_viewport();   // Viewport2D while playing
   void draw_play_status();     // status-bar section while playing
   void draw_play_menu();
+  // Animator section of the Inspector and the Stable panel
+  // (Editor2DScreen_Anim.cpp / Editor2DScreen_Stable.cpp).
+  void draw_inspector_animator(std::uint64_t id);
+  void draw_stable();
   // Collision section of the Inspector (Editor2DScreen_Collision.cpp).
   void draw_inspector_collider(std::uint64_t id);
   // Tile Palette "Solid" checkbox for the brush tile.
@@ -261,6 +319,7 @@ class Editor2DScreen final : public IScreen {
   bool show_toolbar_ = true;
   bool show_tile_palette_ = true;
   bool show_supply_wagon_ = true;
+  bool show_stable_ = true;
   bool dock_layout_initialized_ = false;
 
   // Hierarchy rename state.
@@ -333,6 +392,20 @@ class Editor2DScreen final : public IScreen {
   float play_cam_y_ = 0.0f;
   float play_cam_zoom_ = 1.0f;
   std::vector<runtime::DrawQuad> play_quads_;
+
+  // Animation: sets for previews / the Stable, and the Stable's open set.
+  AnimLibrary anim_lib_;
+  bool anim_preview_ = true;
+  std::string stable_path_;   // project-relative .anim.json ("" = none)
+  AnimSet stable_set_;
+  bool stable_saved_ = false;  // the file exists on disk
+  int stable_clip_ = -1;
+  int stable_anchor_ = -1;     // thumbnail range pick: first cell clicked
+  double stable_play_start_ = 0.0;
+  bool stable_playing_ = true;
+  char stable_name_buf_[64]{};
+  int stable_frame_w_ = 32;
+  int stable_frame_h_ = 32;
 
   // Collision overlay (K).
   bool show_collision_ = false;
