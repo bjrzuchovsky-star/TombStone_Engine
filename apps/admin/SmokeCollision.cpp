@@ -1,11 +1,17 @@
 #include "SmokeCollision.h"
 
+#include "runtime/Collision.h"
+#include "runtime/PlaySession.h"
+#include "runtime/World.h"
 #include "scene/SceneData.h"
 #include "scene/SceneJson.h"
 #include "scene/TileMap.h"
 
+#include <cmath>
+#include <cstdint>
 #include <iostream>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -14,6 +20,273 @@ using namespace ts::tombstone;
 int fail(const std::string& what) {
   std::cerr << "[smoke] collision FAILED: " << what << '\n';
   return 1;
+}
+
+bool near(float a, float b, float eps = 0.01f) {
+  return std::fabs(a - b) <= eps;
+}
+
+runtime::InputFrame ride(float x, float y, int slot = 0) {
+  runtime::InputFrame f;
+  f.slot(slot).move_x = x;
+  f.slot(slot).move_y = y;
+  f.slot(slot).connected = true;
+  return f;
+}
+
+Entity2D make_rider(std::uint64_t id, float x, float y, int slot = 0,
+                    float speed = 160.0f) {
+  Entity2D e;
+  e.id = id;
+  e.name = slot == 0 ? "Rider" : "Rider " + std::to_string(slot + 1);
+  e.x = x;
+  e.y = y;
+  e.w = 32.0f;
+  e.h = 32.0f;
+  e.player = PlayerControllerData{slot, speed};
+  e.collider = default_collider(e);
+  return e;
+}
+
+Entity2D make_box(std::uint64_t id, const char* name, float x, float y,
+                  float w, float h, bool trigger, bool dynamic) {
+  Entity2D e;
+  e.id = id;
+  e.name = name;
+  e.x = x;
+  e.y = y;
+  e.w = w;
+  e.h = h;
+  e.collider = default_collider(e);
+  e.collider->trigger = trigger;
+  e.collider->dynamic = dynamic;
+  return e;
+}
+
+// 12 x 10 grid of 32 px Dirt (walkable) with Stone (solid) in `wall_col`.
+Entity2D make_ground(std::uint64_t id, int wall_col) {
+  Entity2D e;
+  e.id = id;
+  e.name = "Ground";
+  e.tilemap = TileMapData(12, 10, 32);
+  for (int r = 0; r < 10; ++r) {
+    for (int c = 0; c < 12; ++c) {
+      e.tilemap->set(c, r, c == wall_col ? 3 : 1);
+    }
+  }
+  sync_tilemap_extent(e);
+  return e;
+}
+
+float right_edge(const runtime::Actor* a) {
+  return runtime::collider_box(a->data).x1;
+}
+
+// Solid tiles, wall sliding, tunnelling, static crates, overrides.
+int check_walls() {
+  // 1) Ride right into a Stone column at x = 192: stop flush, speed 0.
+  {
+    runtime::World w;
+    w.build({make_ground(1, 6), make_rider(2, 64.0f, 64.0f)});
+    for (int i = 0; i < 120; ++i) {
+      w.step(ride(1.0f, 0.0f));
+    }
+    const runtime::Actor* p = w.player(0);
+    if (!p || !near(right_edge(p), 192.0f, 1.0e-3f) || !near(p->vx, 0.0f) ||
+        !near(p->data.y, 64.0f, 1.0e-4f)) {
+      return fail("rider should stop flush on a solid tile (right edge " +
+                  std::to_string(p ? right_edge(p) : 0.0f) + ")");
+    }
+    // 2) Push diagonally into the wall: X stays flush, Y keeps the
+    // parallel part of the motion (speed / sqrt 2 for half a second).
+    const float y0 = p->data.y;
+    for (int i = 0; i < 30; ++i) {
+      w.step(ride(1.0f, 1.0f));
+    }
+    const float want = 160.0f / std::sqrt(2.0f) * 0.5f;
+    if (!near(right_edge(p), 192.0f, 1.0e-3f) ||
+        !near(p->data.y - y0, want, 0.05f)) {
+      return fail("rider should slide along the wall (dy " +
+                  std::to_string(p->data.y - y0) + ", want " +
+                  std::to_string(want) + ")");
+    }
+    // Overlay (K): one merged run per wall row + the rider's box.
+    std::vector<runtime::OverlayBox> boxes;
+    w.build_overlay({-1000.0f, -1000.0f, 1000.0f, 1000.0f}, 1.0f, &boxes);
+    int tiles = 0;
+    int dyn = 0;
+    for (const runtime::OverlayBox& b : boxes) {
+      if (b.kind == runtime::OverlayKind::SolidTile && b.x0 == 192.0f &&
+          b.x1 == 224.0f) {
+        ++tiles;
+      }
+      if (b.kind == runtime::OverlayKind::DynamicSolid && b.entity == 2) {
+        ++dyn;
+      }
+    }
+    if (tiles != 10 || dyn != 1 || boxes.size() != 11) {
+      return fail("collision overlay boxes (" + std::to_string(boxes.size()) +
+                  ")");
+    }
+  }
+  // 3) 5000 px/s (83 px a tick, more than two tiles) never tunnels:
+  // through a one-tile Stone wall, or a 4 px static fence.
+  {
+    runtime::World w;
+    w.build({make_ground(1, 5), make_rider(2, 32.0f, 0.0f, 0, 5000.0f)});
+    for (int i = 0; i < 10; ++i) {
+      w.step(ride(1.0f, 0.0f));
+    }
+    if (!near(right_edge(w.player(0)), 160.0f, 1.0e-3f)) {
+      return fail("fast rider tunnelled a tile wall (right edge " +
+                  std::to_string(right_edge(w.player(0))) + ")");
+    }
+    runtime::World f;
+    f.build({make_rider(2, 200.0f, 0.0f, 0, 5000.0f),
+             make_box(3, "Fence", 300.0f, -200.0f, 4.0f, 400.0f, false,
+                      false)});
+    f.step(ride(1.0f, 0.0f));
+    if (!near(right_edge(f.player(0)), 300.0f, 1.0e-3f) ||
+        !(f.substep_limit() <= 2.0f)) {
+      return fail("fast rider tunnelled a 4 px fence (right edge " +
+                  std::to_string(right_edge(f.player(0))) + ")");
+    }
+  }
+  // 4) Static solid crate blocks; a crate with no collider does not; a
+  // dynamic crate gets shoved along.
+  {
+    runtime::World w;
+    w.build({make_rider(1, 100.0f, 0.0f),
+             make_box(2, "Crate", 200.0f, 0.0f, 32.0f, 32.0f, false, false)});
+    for (int i = 0; i < 90; ++i) {
+      w.step(ride(1.0f, 0.0f));
+    }
+    if (!near(right_edge(w.player(0)), 200.0f, 1.0e-3f) ||
+        w.find(2)->data.x != 200.0f) {
+      return fail("static crate should block and stay put");
+    }
+    Entity2D ghost = make_box(2, "Ghost", 200.0f, 0.0f, 32.0f, 32.0f, false,
+                              false);
+    ghost.collider.reset();
+    runtime::World g;
+    g.build({make_rider(1, 100.0f, 0.0f), ghost});
+    for (int i = 0; i < 90; ++i) {
+      g.step(ride(1.0f, 0.0f));
+    }
+    if (!near(g.player(0)->data.x, 100.0f + 160.0f * 1.5f, 0.05f)) {
+      return fail("crate without a collider should not block");
+    }
+    runtime::World d;
+    d.build({make_rider(1, 100.0f, 0.0f),
+             make_box(2, "Barrel", 200.0f, 0.0f, 32.0f, 32.0f, false, true)});
+    for (int i = 0; i < 90; ++i) {
+      d.step(ride(1.0f, 0.0f));
+    }
+    const runtime::Actor* barrel = d.find(2);
+    if (!(barrel->data.x > 230.0f) ||
+        runtime::overlaps(runtime::collider_box(d.player(0)->data),
+                          runtime::collider_box(barrel->data))) {
+      return fail("dynamic crate should be shoved, not overlapped");
+    }
+  }
+  // 5) Project override: Dirt made solid blocks; Stone made walkable
+  // doesn't (scene.json tile_solidity).
+  {
+    TileSolidity ts;
+    ts.set_solid("", 1, true);
+    ts.set_solid("", 3, false);
+    Entity2D ground = make_ground(1, 6);
+    for (int c = 0; c < 12; ++c) {
+      ground.tilemap->set(c, 0, 4);  // a Grass lane on row 0
+    }
+    ground.tilemap->set(9, 0, 1);  // one Dirt block in the lane
+    runtime::PlaySession s;
+    if (!s.start({ground, make_rider(2, 64.0f, 0.0f)}, ts, "")) {
+      return fail("session with tile solidity");
+    }
+    s.run_ticks(180, ride(1.0f, 0.0f));
+    if (!near(right_edge(s.world().player(0)), 288.0f, 1.0e-3f) ||
+        !s.world().tile_solidity().solid("", 1)) {
+      return fail("tile_solidity overrides (right edge " +
+                  std::to_string(right_edge(s.world().player(0))) + ")");
+    }
+  }
+  return 0;
+}
+
+// Dynamic vs dynamic: riders push apart and never end a tick overlapped.
+int check_riders() {
+  runtime::World w;
+  w.build({make_rider(1, 100.0f, 100.0f, 0), make_rider(2, 110.0f, 100.0f, 1)});
+  w.step(runtime::InputFrame{});
+  const runtime::Actor* a = w.player(0);
+  const runtime::Actor* b = w.player(1);
+  if (!near(a->data.x, 89.0f) || !near(b->data.x, 121.0f) ||
+      runtime::overlaps(runtime::collider_box(a->data),
+                        runtime::collider_box(b->data))) {
+    return fail("overlapping riders should separate half each (" +
+                std::to_string(a->data.x) + ", " + std::to_string(b->data.x) +
+                ")");
+  }
+  for (int i = 0; i < 60; ++i) {
+    runtime::InputFrame f = ride(1.0f, 0.0f, 0);
+    f.slot(1).move_x = -1.0f;
+    f.slot(1).connected = true;
+    w.step(f);
+    if (runtime::overlaps(runtime::collider_box(a->data),
+                          runtime::collider_box(b->data))) {
+      return fail("riders overlapped after tick " + std::to_string(i));
+    }
+  }
+  return 0;
+}
+
+// Trigger enter / exit fire exactly once each, on the right ticks, and the
+// trigger never blocks.
+int check_triggers() {
+  runtime::World w;
+  w.build({make_rider(1, 100.0f, 0.0f),
+           make_box(2, "Gate", 200.0f, -16.0f, 64.0f, 64.0f, true, false)});
+  int enters = 0;
+  int exits = 0;
+  std::uint64_t enter_tick = 0;
+  std::uint64_t exit_tick = 0;
+  bool active_seen = false;
+  for (int i = 0; i < 120; ++i) {
+    w.step(ride(1.0f, 0.0f));
+    for (const runtime::TriggerEvent& ev : w.trigger_events()) {
+      if (ev.trigger != 2 || ev.other != 1 || ev.tick != w.tick()) {
+        return fail("trigger event fields");
+      }
+      if (ev.kind == runtime::TriggerEvent::Kind::Enter) {
+        ++enters;
+        enter_tick = ev.tick;
+      } else {
+        ++exits;
+        exit_tick = ev.tick;
+      }
+    }
+    if (w.inside_trigger(2, 1) && !active_seen) {
+      std::vector<runtime::OverlayBox> boxes;
+      w.build_overlay({0.0f, -100.0f, 400.0f, 100.0f}, 1.0f, &boxes);
+      for (const runtime::OverlayBox& b : boxes) {
+        active_seen |= b.kind == runtime::OverlayKind::Trigger && b.active;
+      }
+    }
+  }
+  // Rider right edge 132 -> crosses x = 200 on tick 26; left edge 100
+  // passes x = 264 on tick 62.
+  if (enters != 1 || exits != 1 || enter_tick != 26 || exit_tick != 62 ||
+      !active_seen || w.trigger_event_total() != 2 ||
+      !w.last_trigger_event() ||
+      w.last_trigger_event()->kind != runtime::TriggerEvent::Kind::Exit ||
+      w.describe(*w.last_trigger_event()) != "Rider rode out of Gate" ||
+      !near(w.player(0)->data.x, 100.0f + 320.0f, 0.05f)) {
+    return fail("trigger enter/exit (" + std::to_string(enters) + "@" +
+                std::to_string(enter_tick) + ", " + std::to_string(exits) +
+                "@" + std::to_string(exit_tick) + ")");
+  }
+  return 0;
 }
 
 // v4: colliders + per-tileset tile solidity, and the v3 -> v4 upgrade.
@@ -108,11 +381,14 @@ int check_v4_format() {
 }  // namespace
 
 int run_collision_smoke() {
-  if (check_v4_format() != 0) {
+  if (check_v4_format() != 0 || check_walls() != 0 ||
+      check_riders() != 0 || check_triggers() != 0) {
     return 1;
   }
-  std::cout << "[smoke] collision OK (scene.json v4 colliders + tile "
-               "solidity roundtrip, built-in solid defaults, v3 -> v4 "
-               "rider collider upgrade)\n";
+  std::cout << "[smoke] collision OK (solid tile stops flush, wall slide "
+               "keeps parallel motion, 5000 px/s no tunnel through tile or "
+               "4 px fence, static crate blocks, dynamic crate shoved, "
+               "tile_solidity overrides, riders separate, trigger enter/exit "
+               "once each, overlay, v3 -> v4 upgrade + roundtrip)\n";
   return 0;
 }
