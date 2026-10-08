@@ -237,11 +237,13 @@ int check_v5_format() {
   doc.entities[0].animator = an;
   const std::string v5 = scene_json::write(doc);
   scene_json::SceneDoc back;
-  if (v5.find("\"version\": 5") == std::string::npos ||
+  if (v5.find("\"version\": " + std::to_string(scene_json::kSceneVersion)) ==
+          std::string::npos ||
       v5.find("\"animator\": {\"set\": \"assets/rider.anim.json\", \"clip\": "
               "\"walk_right\", \"default_clip\": \"idle_down\", \"speed\": 1.5, "
               "\"playing\": false}") == std::string::npos ||
-      !scene_json::parse(v5, &back, &err) || back.version != 5 ||
+      !scene_json::parse(v5, &back, &err) ||
+      back.version != scene_json::kSceneVersion ||
       back.entities != doc.entities || scene_json::write(back) != v5) {
     return fail("v5 animator roundtrip: " + err + "\n" + v5);
   }

@@ -82,7 +82,8 @@ int run_animation_editor_smoke() {
   if (!fs::exists(dir / "assets" / "rider.png") ||
       !fs::exists(dir / "assets" / "rider.anim.json") || !player ||
       !player->animator || player->animator->set != kSet ||
-      !has(seeded, "\"version\": 5") ||
+      !has(seeded, "\"version\": " +
+                       std::to_string(scene_json::kSceneVersion)) ||
       !has(seeded, "\"animator\": {\"set\": \"assets/rider.anim.json\"")) {
     return fail("seed scene should carry the rider sheet and an animator");
   }
