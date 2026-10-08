@@ -88,5 +88,8 @@ int run_scripting_smoke() {
   }
   std::cout << "[smoke] scripting data OK (scene.json v6 script + typed props "
                "roundtrip, v5 -> v6 load, malformed refused)\n";
-  return run_script_runtime_smoke();
+  if (run_script_runtime_smoke() != 0) {
+    return 1;
+  }
+  return run_script_editor_smoke();
 }

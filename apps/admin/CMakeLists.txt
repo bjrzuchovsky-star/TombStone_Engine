@@ -6,6 +6,7 @@ add_executable(ts_admin
   SmokeAnimEditor.cpp
   SmokeScripting.cpp
   SmokeScriptRuntime.cpp
+  SmokeScriptEditor.cpp
 )
 
 target_link_libraries(ts_admin
