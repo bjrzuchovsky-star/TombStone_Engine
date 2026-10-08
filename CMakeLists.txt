@@ -15,8 +15,6 @@ add_subdirectory(src/input)
 add_subdirectory(src/net)
 add_subdirectory(src/physics)
 add_subdirectory(src/scene)
-# Game runtime (World, fixed-step PlaySession). Pure C++, always built.
-add_subdirectory(src/runtime)
 
 # Windowed apps: GLFW + OpenGL + stb_image for ts_admin and ts_game (ts_gfx:
 # texture cache + GL helpers). Dear ImGui is fetched only for the Admin.
@@ -24,6 +22,14 @@ add_subdirectory(src/runtime)
 if(TS_BUILD_ADMIN OR TS_BUILD_GAME)
   include(FetchImGuiDeps)
   add_subdirectory(src/gfx)
+endif()
+
+# Game runtime (World, fixed-step PlaySession, Lua gameplay scripts). Pure
+# C++ with no window or GL; built for the apps that run the game. Lua 5.4 is
+# fetched by hash, so Client-only builds still download nothing.
+if(TS_BUILD_ADMIN OR TS_BUILD_GAME)
+  include(FetchLua)
+  add_subdirectory(src/runtime)
 endif()
 
 # Editor / Admin UI module (screens + AppFlow). Admin-only.

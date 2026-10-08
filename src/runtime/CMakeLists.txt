@@ -1,7 +1,7 @@
 # Game runtime: World (actors, fixed-step simulation, follow camera, draw
-# list) and PlaySession (play / pause / step / stop). Depends only on the
-# scene data -- no ImGui, no GL -- so the editor, ts_game and a future
-# headless server can all drive it.
+# list), PlaySession (play / pause / step / stop) and the sandboxed Lua script
+# host. Depends only on the scene data and Lua -- no ImGui, no GL -- so the
+# editor, ts_game and a future headless server can all drive it.
 add_library(ts_runtime
   World.cpp
   World_Collision.cpp
@@ -17,6 +17,8 @@ target_include_directories(ts_runtime
 target_link_libraries(ts_runtime
   PUBLIC
     ts_scene
+  PRIVATE
+    ts_lua
 )
 
 target_compile_features(ts_runtime PUBLIC cxx_std_20)
