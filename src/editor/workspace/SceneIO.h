@@ -1,6 +1,7 @@
 #pragma once
 
 #include "editor/workspace/Workspace2D.h"
+#include "scene/SceneJson.h"
 
 #include <string>
 
@@ -9,20 +10,20 @@ namespace tombstone {
 namespace editor {
 namespace scene_io {
 
-// scene.json format version written by save(). 1 = entities only;
-// 2 = adds optional per-entity "tilemap" and "sprite" objects.
-inline constexpr int kSceneVersion = 2;
+// scene.json format version written by save(); the format itself lives in
+// scene/SceneJson (shared with the runtime). 1 = entities only; 2 = adds
+// "tilemap" / "sprite"; 3 = adds "player" / "camera" / "spawn".
+inline constexpr int kSceneVersion = scene_json::kSceneVersion;
 
 // Per-project Editor2D persistence: <project_dir>/scene.json
 inline std::string scene_path_for_project(const std::string& project_dir) {
-  if (project_dir.empty()) {
-    return "scene.json";
-  }
-  if (project_dir.back() == '/' || project_dir.back() == '\\') {
-    return project_dir + "scene.json";
-  }
-  return project_dir + "/scene.json";
+  return scene_json::scene_path_for_project(project_dir);
 }
+
+// Workspace <-> document (entities + view state). to_doc() is also what
+// --smoke uses to compare workspaces byte for byte.
+scene_json::SceneDoc to_doc(const Workspace2D& workspace);
+void apply_doc(Workspace2D& workspace, scene_json::SceneDoc doc);
 
 // Load entities + view state into workspace. Returns false if missing/invalid.
 bool load(Workspace2D& workspace, const std::string& scene_path,

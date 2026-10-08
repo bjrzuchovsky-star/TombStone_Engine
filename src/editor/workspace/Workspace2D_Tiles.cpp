@@ -14,15 +14,6 @@ int Workspace2D::next_layer() const {
   return static_cast<int>(entities_.size());
 }
 
-void Workspace2D::sync_tilemap_extent(Entity2D& e) {
-  if (!e.tilemap) {
-    return;
-  }
-  e.tilemap->normalize();
-  e.w = static_cast<float>(e.tilemap->cols * e.tilemap->tile_size);
-  e.h = static_cast<float>(e.tilemap->rows * e.tilemap->tile_size);
-}
-
 std::uint64_t Workspace2D::create_tilemap(std::string name, int cols, int rows,
                                           int tile_size) {
   if (name.empty()) {

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "editor/workspace/TileMap.h"
+#include "scene/SceneData.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -13,26 +14,12 @@ namespace ts {
 namespace tombstone {
 namespace editor {
 
-// Simple in-memory 2D entity for the Editor2D workspace (not the runtime scene).
-struct Entity2D {
-  std::uint64_t id = 0;
-  std::string name;
-  float x = 0.0f;
-  float y = 0.0f;
-  float w = 64.0f;
-  float h = 64.0f;
-  float color[4] = {0.35f, 0.65f, 0.95f, 1.0f};  // RGBA tint
-  int layer = 0;                                  // z-order (higher draws later)
-  // Optional components. A TileMap entity's w/h follow its grid; a sprite
-  // draws a textured quad tinted by `color` (falls back to the rect).
-  std::optional<TileMapData> tilemap;
-  std::optional<SpriteData> sprite;
-};
-
-bool operator==(const Entity2D& a, const Entity2D& b);
-inline bool operator!=(const Entity2D& a, const Entity2D& b) {
-  return !(a == b);
-}
+// Entity2D and its components live in scene/SceneData.h (shared with the
+// runtime); the editor works on the same structs.
+using ::ts::tombstone::Camera2DData;
+using ::ts::tombstone::Entity2D;
+using ::ts::tombstone::PlayerControllerData;
+using ::ts::tombstone::SpawnPointData;
 
 // Flat hierarchy under a conceptual root "Scene" node.
 // Persisted per project as scene.json via scene_io (load/save).
@@ -153,7 +140,9 @@ class Workspace2D {
   bool set_tile_size(std::uint64_t id, int tile_size);
   bool set_tileset(std::uint64_t id, std::string path);
   // Keep w/h equal to the grid extent.
-  static void sync_tilemap_extent(Entity2D& e);
+  static void sync_tilemap_extent(Entity2D& e) {
+    ::ts::tombstone::sync_tilemap_extent(e);
+  }
   // First TileMap in draw order (0 when none).
   std::uint64_t first_tilemap() const;
   // Topmost TileMap under a world point.

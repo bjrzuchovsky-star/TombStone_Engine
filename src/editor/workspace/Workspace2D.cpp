@@ -56,7 +56,13 @@ void Workspace2D::reset_defaults() {
   player.color[2] = 0.45f;
   player.color[3] = 1.0f;
   player.layer = 5;
+  // Rides on player slot 0 (WASD / arrows / first gamepad) in Play mode.
+  player.player = PlayerControllerData{};
   entities_.push_back(player);
+  // The seeded camera trails the rider.
+  Camera2DData follow;
+  follow.target = player.id;
+  entities_.front().camera = follow;
 
   // A real 8x2 TileMap (32 px cells, 256x64 like the old placeholder):
   // a grass top row over dirt so the seed scene shows painted tiles.
@@ -565,18 +571,7 @@ void Workspace2D::adjust_zoom(float factor, float anchor_screen_x,
 }
 
 std::vector<std::size_t> Workspace2D::sorted_draw_order() const {
-  std::vector<std::size_t> order(entities_.size());
-  for (std::size_t i = 0; i < entities_.size(); ++i) {
-    order[i] = i;
-  }
-  std::stable_sort(order.begin(), order.end(),
-                   [this](std::size_t a, std::size_t b) {
-                     if (entities_[a].layer != entities_[b].layer) {
-                       return entities_[a].layer < entities_[b].layer;
-                     }
-                     return entities_[a].id < entities_[b].id;
-                   });
-  return order;
+  return draw_order(entities_);  // same order the runtime draws in
 }
 
 std::uint64_t Workspace2D::alloc_id() {

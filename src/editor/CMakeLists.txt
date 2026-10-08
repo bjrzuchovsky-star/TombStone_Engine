@@ -7,12 +7,9 @@ add_library(ts_editor
   workspace/Workspace2D.cpp
   workspace/Workspace2D_History.cpp
   workspace/Workspace2D_Tiles.cpp
-  workspace/TileMap.cpp
   workspace/SceneIO_Load.cpp
   workspace/SceneIO_Save.cpp
   assets/AssetLibrary.cpp
-  assets/TextureCache.cpp
-  assets/StbImageImpl.cpp
   ui/FolderBrowser.cpp
   ui/Theme.cpp
   screens/LoadingScreen.cpp
@@ -35,9 +32,9 @@ target_include_directories(ts_editor
 target_link_libraries(ts_editor
   PUBLIC
     ts_core
+    ts_scene
+    ts_gfx
     ts_imgui
-  PRIVATE
-    ts_stb_image
 )
 
 target_compile_features(ts_editor PUBLIC cxx_std_20)

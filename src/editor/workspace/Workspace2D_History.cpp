@@ -7,14 +7,6 @@ namespace ts {
 namespace tombstone {
 namespace editor {
 
-bool operator==(const Entity2D& a, const Entity2D& b) {
-  return a.id == b.id && a.name == b.name && a.x == b.x && a.y == b.y &&
-         a.w == b.w && a.h == b.h && a.color[0] == b.color[0] &&
-         a.color[1] == b.color[1] && a.color[2] == b.color[2] &&
-         a.color[3] == b.color[3] && a.layer == b.layer &&
-         a.tilemap == b.tilemap && a.sprite == b.sprite;
-}
-
 namespace {
 
 const std::string kEmptyLabel;
