@@ -181,6 +181,7 @@ Hit **Play** and the scene rides: the Viewport stops being an editing canvas and
 | Move player 1 | WASD or arrow keys; gamepad left stick / d-pad |
 | Gamepads | pads 1-4 drive player slots 1-4 (pad 1 shares slot 1 with the keyboard) |
 | Free camera | C toggles; drag to pan, wheel to zoom (C again hands back to the follow cam) |
+| Collision overlay | K (also Play menu; works in edit mode too) |
 | Launch Game | toolbar Launch / File menu: saves, then starts `ts_game` on this project |
 
 While riding the viewport gets a copper frame and a `RIDING mm:ss tick N` badge (amber `PAUSED` and a dimmed scene while held); the status bar shows the play clock, tick count, measured ticks/s, player 1's position and the camera mode. Edit tools, the Hierarchy, Inspector, Tile Palette and Supply Wagon are locked, and Save is refused with a note. **Esc never ends a ride**: only F5 / Ctrl+P / Stop do. Play flushes any half-finished edit and autosaves first, so `ts_game` and Play see the same scene.
@@ -191,7 +192,32 @@ Gameplay components are edited in the Inspector (each change is one undo step):
 - **Camera2D**: follow target, smoothing (seconds; 0 = locked on), zoom, optional bounds rect (**Fit to TileMap**). With no Camera2D the game follows player 1.
 - **Spawn Point**: the player in this slot starts centred on it.
 
-New projects seed **Player** with a P1 controller and **Camera2D** following it.
+New projects seed **Player** with a P1 controller and a dynamic collider, and **Camera2D** following it.
+
+### Collision and solid tiles
+
+The game is top-down with no gravity: up to four riders move freely and the runtime (`src/runtime/World_Collision.cpp`, no UI or GL) keeps them out of the walls.
+
+- **Solid tiles.** Every tile id in a tileset is solid or walkable. The built-in palette starts with Stone, Water, Wood, Adobe, Brick, Cactus, Coal and Gold Ore solid (Dirt, Sand, Grass and the rest are open ground); an image tileset starts with nothing solid. Project overrides live in `scene.json` under `tile_solidity` (per tileset, so every TileMap using that tileset agrees).
+- **Colliders.** Any entity can carry an axis-aligned box collider: offset and size relative to the entity, **solid** or **trigger**, **static** or **dynamic**. Static solids (crates, fences, walls) block riders and never move. Dynamic solids (riders, barrels) get pushed. Entities without a collider are scenery.
+- **Movement.** Each tick a rider moves X first, resolves against solid tiles and static solids, then Y, so pushing diagonally into a wall slides along it. A move longer than half the thinnest obstacle (half a tile, half a 4 px fence) is split into substeps, so nothing tunnels even at thousands of px/s. Riders stop flush: a 32 px rider stopped by a wall at x = 192 has its right edge at exactly 192.
+- **Dynamic vs dynamic.** After moving, overlapping dynamic bodies are pushed apart along the axis of least overlap, half each (a few passes), so riders never finish a tick inside one another and a rider can shove a barrel.
+- **Triggers.** A trigger collider never blocks. Each tick the World records enter / exit events for riders and dynamic bodies (exits before enters, each fired exactly once). The editor's Play status bar and the K overlay show the latest one ("Player rode into Gate (tick 171)"), and `ts_game` shows it in the window title. Triggers have no behaviour of their own yet: they are the hook for scripting.
+
+**Solid-tile workflow.** In the **Tile Palette**, solid tiles carry a red corner wedge. **Right-click** a tile to toggle it, or use the **Solid** checkbox next to the brush tile. Each toggle is one undo step ("Solid: Grass" / "Walkable: Grass"), autosaves `scene.json`, and applies to the tileset of the TileMap being painted (or the built-in palette).
+
+**Colliders in the Inspector.** The **Collision** section shows **+ Collider** (sized to the entity: dynamic for players, static otherwise), then Solid / Trigger, Static / Dynamic, Offset and Size, **Fit to Entity** and **Remove Collider**. Every change is one undo step, and a whole drag of Offset or Size is one step.
+
+**K overlay.** **K** (or **Play → Collision Overlay**) toggles the collision overlay in both the edit Viewport and Play:
+
+| Colour | Shows |
+|---|---|
+| Red | Solid tiles (each row merged into runs) |
+| Copper | Static solid colliders |
+| Green | Dynamic solid colliders (riders, barrels) |
+| Gold with a cross | Triggers (filled while somebody is inside) |
+
+A legend sits in the Viewport's bottom-left corner. In edit mode the overlay reflects the scene as edited, and in Play it reflects the live World. K is ignored while typing in a text field.
 
 ### ts_game (the standalone game)
 
@@ -200,27 +226,39 @@ New projects seed **Player** with a P1 controller and **Camera2D** following it.
 ./build/apps/game/ts_game --smoke --project <dir>    # headless: load, ride 60 ticks, verify, exit
 ```
 
-`ts_game` opens its own GLFW window (1280x720, resizable), loads `<project>/scene.json` and its images through the runtime, and draws tilemaps and sprites with a small fixed-function OpenGL renderer (no ImGui, no editor code). Keys: WASD / arrows (and gamepads 1-4) ride, P or F6 pause, F10 step while paused, R or F5 reload `scene.json` from disk, Esc quit. The editor's **Launch Game** finds `ts_game` next to `ts_admin` or in the build tree (`build/apps/game/`); if it isn't built it says so (configure with `-DTS_BUILD_GAME=ON`).
+`ts_game` opens its own GLFW window (1280x720, resizable), loads `<project>/scene.json` and its images through the runtime, and draws tilemaps and sprites with a small fixed-function OpenGL renderer (no ImGui, no editor code). Keys: WASD / arrows (and gamepads 1-4) ride, P or F6 pause, F10 step while paused, R or F5 reload `scene.json` from disk, K collision overlay (same colours as the editor; `--collision` starts with it on), Esc quit. The title bar shows P1's position and the latest trigger event. The editor's **Launch Game** finds `ts_game` next to `ts_admin` or in the build tree (`build/apps/game/`); if it isn't built it says so (configure with `-DTS_BUILD_GAME=ON`).
 
-**Runtime architecture.** `src/scene` owns the data (Entity2D and its optional components, tilemaps, the scene.json reader/writer) and `src/runtime` owns the game: a `World` built from a copy of the entities, advanced by a `PlaySession` at a fixed 60 Hz (accumulator, at most 8 catch-up ticks per frame) from an abstract per-player `InputFrame` (move x/y + action buttons for slots 0-3), with a follow camera and a renderer-neutral draw list (world-space quads + UVs) interpolated between ticks. Neither library knows about ImGui or OpenGL: the editor feeds it keyboard/gamepad input and draws the list with ImGui, `ts_game` feeds GLFW input and draws it with OpenGL, and `--smoke` feeds scripted input. Collision, animation, scripting and networked players (a local server plus up to four clients) slot in as more per-tick systems and more `InputFrame` sources without touching the editor.
+**Runtime architecture.** `src/scene` owns the data (Entity2D and its optional components, tilemaps, the scene.json reader/writer) and `src/runtime` owns the game: a `World` built from a copy of the entities, advanced by a `PlaySession` at a fixed 60 Hz (accumulator, at most 8 catch-up ticks per frame) from an abstract per-player `InputFrame` (move x/y + action buttons for slots 0-3), with a follow camera and a renderer-neutral draw list (world-space quads + UVs) interpolated between ticks. Neither library knows about ImGui or OpenGL: the editor feeds it keyboard/gamepad input and draws the list with ImGui, `ts_game` feeds GLFW input and draws it with OpenGL, and `--smoke` feeds scripted input. Collision runs inside the World's tick (see above). Animation, scripting and networked players (a local server plus up to four clients) slot in as more per-tick systems and more `InputFrame` sources without touching the editor.
 
 ### scene.json format
 
-`"version": 3` (current). Every entity has id/name, x/y/w/h, r/g/b/a and layer, plus optional component objects. Version 2 added `tilemap` and `sprite`; version 3 adds the gameplay components `player`, `camera` and `spawn`:
+`"version": 4` (current). Every entity has id/name, x/y/w/h, r/g/b/a and layer, plus optional component objects. Version 2 added `tilemap` and `sprite`, version 3 added the gameplay components `player`, `camera` and `spawn`, and version 4 adds `collider` and the top-level `tile_solidity`:
 
 ```json
 "tilemap": {"cols": 8, "rows": 2, "tile_size": 32, "tileset": "", "encoding": "rle", "data": "8*4,8*1"},
 "sprite": {"path": "assets/rider.png", "flip_x": false, "flip_y": false, "use_src": false, "src_x": 0, "src_y": 0, "src_w": 0, "src_h": 0},
 "player": {"slot": 0, "speed": 160},
 "camera": {"target": 2, "smoothing": 0.15, "zoom": 1, "use_bounds": false, "bounds_x": 0, "bounds_y": 0, "bounds_w": 1024, "bounds_h": 768},
-"spawn": {"slot": 0}
+"spawn": {"slot": 0},
+"collider": {"x": 0, "y": 0, "w": 32, "h": 48, "type": "solid", "body": "dynamic"}
 ```
 
-Older files still load: a v1 entity named `TileMap*` becomes an empty 32 px grid covering its old rect, and a v1/v2 scene with no gameplay components gets a P1 controller on the entity named `Player` and a follow camera on `Camera2D` (targeting Player), so old projects play straight away. The file is written as v3 on the next save.
+`collider` x/y are the offset from the entity's top-left corner, `type` is `solid` or `trigger`, and `body` is `static` or `dynamic`. The scene's `tile_solidity` lists the solid tile ids of each tileset that differs from the defaults (`""` = the built-in palette). A listed tileset uses exactly its list, and a toggle that brings a tileset back to its defaults drops its entry:
+
+```json
+"tile_solidity": [
+  {"tileset": "", "solid": [3, 4, 5, 6, 8, 11, 12, 14, 15]},
+  {"tileset": "assets/tiles.png", "solid": [7, 8, 9]}
+]
+```
+
+Older files still load: a v1 entity named `TileMap*` becomes an empty 32 px grid covering its old rect, and a v1/v2 scene with no gameplay components gets a P1 controller on the entity named `Player` and a follow camera on `Camera2D` (targeting Player), so old projects play straight away. A v1-v3 scene gives every `player` entity a default dynamic collider (its whole rect) and starts with default tile solidity. A v4 rider without a collider stays a ghost. The file is written as v4 on the next save.
 
 `data` is row-major run-length text: comma-separated `count*id` runs (a single cell is just `id`).
 
-`--smoke` also runs the runtime headless: scripted input moves the player exactly speed x time at 60 Hz (diagonals clamped), the camera follows and respects bounds, spawn points place riders, pause holds the world and step runs exactly one tick, Play -> Stop in the editor restores the workspace byte-for-byte with undo history and `scene.json` (bytes and mtime) untouched, edit tools are locked while playing, and a v2 project opens as v3 and plays.
+`--smoke` also runs the runtime headless: scripted input moves the player exactly speed x time at 60 Hz (diagonals clamped), the camera follows and respects bounds, spawn points place riders, pause holds the world and step runs exactly one tick, Play -> Stop in the editor restores the workspace byte-for-byte with undo history and `scene.json` (bytes and mtime) untouched, edit tools are locked while playing, and a v2 project opens and plays.
+
+Collision `--smoke`: a rider stops flush on a solid tile with zero speed, slides along a wall while pushing diagonally (keeping exactly the parallel motion), never tunnels at 5000 px/s through a tile or a 4 px fence, is blocked by a static crate and shoves a dynamic one, and respects `tile_solidity` overrides. Two riders dropped inside each other separate half each and never overlap while charging head-on. A trigger fires one enter and one exit on the expected ticks. The overlay boxes are checked, along with the v3 -> v4 upgrade and a byte-identical v4 roundtrip. The editor half toggles a palette tile (one undo step, `scene.json` in sync through undo / redo), removes and edits a collider with undo / redo, then plays: the rider stops on the newly solid tile, rides into a trigger exactly once, collision edits are locked, and Stop leaves solidity and `scene.json` alone. `ts_game --smoke` checks P1's collider shows in the overlay and reports the box and trigger counts.
 
 The editor `--smoke` also paints a multi-cell stroke and checks it is one undo step, a 2x2 brush, erase, a cancelled stroke, bucket fill, rect fill/erase, eyedropper, resize (keeps tiles; undo restores cut cells), tile size, undo-all / redo-all with `scene.json` in sync, the v2 RLE roundtrip, the v1 upgrade, sprite drop-create / assign / flip / source-rect roundtrip with undo/redo, missing and corrupt image fallbacks, tileset slicing, and import.
 
