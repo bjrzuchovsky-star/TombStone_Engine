@@ -93,10 +93,11 @@ src/input/              # Input stubs
 src/net/                # Networking stubs (4-player MMO target later)
 src/physics/            # 2D physics stubs
 src/scene/              # Scene data: Entity2D + components, TileMap, scene.json read/write (no UI, no GL)
-src/runtime/            # Game runtime: World, PlaySession (60 Hz fixed step), abstract input (no UI, no GL)
+src/runtime/            # Game runtime: World, PlaySession (60 Hz fixed step), abstract input, Lua script host, Telegraph log (no UI, no GL)
 src/gfx/                # stb_image TextureCache + OpenGL texture uploader (admin + game)
 src/editor/             # Admin UI (AppFlow, settings, projects, workspace, Play mode, launcher, ui, screens)
 cmake/FetchImGuiDeps.cmake  # FetchContent GLFW + stb_image (admin + game) and Dear ImGui (admin only)
+cmake/FetchLua.cmake    # FetchContent Lua 5.4.8 (hash-pinned, core + pure libs only, built as C++)
 apps/admin|client|game/ # Build targets controlled by TS_BUILD_*
 ```
 
@@ -108,7 +109,7 @@ apps/admin|client|game/ # Build targets controlled by TS_BUILD_*
 2. **Login** -- username/password, Login, Dev login, Settings  
 3. **ProjectManager** -- list projects, Open / double-click, New 2D (validated name), Settings, Logout; errors shown in-UI  
 4. **Settings** -- edit `projects_root` (Browse opens an in-app ImGui folder picker), theme, `auto_login_dev`, username; Apply/Save still validates, writes settings, and reloads projects  
-5. **Editor2D** -- live Hierarchy (create/duplicate/rename/delete, multi-select), Viewport2D canvas (drag-to-move, box select, snap-to-grid, pan MMB/RMB/Alt-drag, wheel zoom), Inspector (name, snapped transform, color/tint, layer/z, TileMap / Sprite / Player / Camera2D / Spawn Point / Collision / Animator sections) + Back, **Tile Palette** (tilemap painting), **Stable** (animation sets) and **Supply Wagon** (project images); File → Save Scene; **Play / Pause / Stop** runs the scene in the Viewport  
+5. **Editor2D** -- live Hierarchy (create/duplicate/rename/delete, multi-select), Viewport2D canvas (drag-to-move, box select, snap-to-grid, pan MMB/RMB/Alt-drag, wheel zoom), Inspector (name, snapped transform, color/tint, layer/z, TileMap / Sprite / Player / Camera2D / Spawn Point / Collision / Animator / Script sections) + Back, **Tile Palette** (tilemap painting), **Stable** (animation sets), **Supply Wagon** (project images), **Scripts** (Lua files) and the **Telegraph** (console); File → Save Scene; **Play / Pause / Stop** runs the scene in the Viewport  
 
 Namespace: `ts::tombstone::editor`.
 
@@ -123,7 +124,7 @@ Admin has its own look, kept in `src/editor/ui/Theme` (palette, metrics, custom-
 - Sharp 2-3 px corners with 1 px inked frame borders. Custom-drawn section headers (amber diamond, label, caption, fading copper rule), ornamental dividers, a headstone mark, title strips, and a branded progress bar. Hover and active states go copper and amber.
 - Copy keeps one short, dry voice: splash "TOMBSTONE / Four riders. One frontier. Build it right.", login "Sign the ledger. Ride in.", Project Manager "Claims" / "Break Ground" / "Bury Project?", and Settings sections "Territory / Rider / Lamplight / Trail". The editor status bar carries the brand, and the window title follows the open project.
 
-Editor2D runs in an ImGui **Docking** layout (Hierarchy over Supply Wagon / Viewport2D / Inspector over Tile Palette and Stable) with a tool strip (Undo, Redo, Select/Brush/Erase/Fill/Rect/Pick tools + brush swatch, Grid, Snap, cell size, Duplicate, Delete, Reset Cam, Save) and a status bar (fps, zoom, grid/snap, selection, recent action, path). Docking and multi-viewport flags are enabled in `apps/admin/main.cpp`.
+Editor2D runs in an ImGui **Docking** layout (Hierarchy over Supply Wagon and Scripts / Viewport2D over the Telegraph / Inspector over Tile Palette and Stable) with a tool strip (Undo, Redo, Select/Brush/Erase/Fill/Rect/Pick tools + brush swatch, Grid, Snap, cell size, Duplicate, Delete, Reset Cam, Save) and a status bar (fps, zoom, grid/snap, selection, Telegraph badge, recent action, path). Docking and multi-viewport flags are enabled in `apps/admin/main.cpp`.
 
 ### Editor2D tools
 
@@ -179,12 +180,13 @@ Hit **Play** and the scene rides: the Viewport stops being an editing canvas and
 | Pause / resume | F6 (toolbar Pause) |
 | Step one tick (paused) | F10 (toolbar Step) |
 | Move player 1 | WASD or arrow keys; gamepad left stick / d-pad |
+| Action | E or Space; gamepad A (opens the sample gate, talks to signs) |
 | Gamepads | pads 1-4 drive player slots 1-4 (pad 1 shares slot 1 with the keyboard) |
 | Free camera | C toggles; drag to pan, wheel to zoom (C again hands back to the follow cam) |
 | Collision overlay | K (also Play menu; works in edit mode too) |
 | Launch Game | toolbar Launch / File menu: saves, then starts `ts_game` on this project |
 
-While riding the viewport gets a copper frame and a `RIDING mm:ss tick N` badge (amber `PAUSED` and a dimmed scene while held); the status bar shows the play clock, tick count, measured ticks/s, player 1's position and the camera mode. Edit tools, the Hierarchy, Inspector, Tile Palette and Supply Wagon are locked, and Save is refused with a note. **Esc never ends a ride**: only F5 / Ctrl+P / Stop do. Play flushes any half-finished edit and autosaves first, so `ts_game` and Play see the same scene.
+While riding the viewport gets a copper frame and a `RIDING mm:ss tick N` badge (amber `PAUSED` and a dimmed scene while held); the status bar shows the play clock, tick count, measured ticks/s, player 1's position and the camera mode. Edit tools, the Hierarchy, Inspector, Tile Palette and Supply Wagon are locked, and Save is refused with a note. The Scripts panel and the Telegraph stay live: edit a script, save, and watch the ride pick it up. Script toasts show as cards at the bottom of the Viewport. **Esc never ends a ride**: only F5 / Ctrl+P / Stop do. Play flushes any half-finished edit and autosaves first, so `ts_game` and Play see the same scene.
 
 Gameplay components are edited in the Inspector (each change is one undo step):
 
@@ -192,7 +194,7 @@ Gameplay components are edited in the Inspector (each change is one undo step):
 - **Camera2D**: follow target, smoothing (seconds; 0 = locked on), zoom, optional bounds rect (**Fit to TileMap**). With no Camera2D the game follows player 1.
 - **Spawn Point**: the player in this slot starts centred on it.
 
-New projects seed **Player** with a P1 controller, a dynamic collider and the animated sample cowboy (see Sprite animation), and **Camera2D** following it.
+New projects seed **Player** with a P1 controller, a dynamic collider and the animated sample cowboy (see Sprite animation), **Camera2D** following it, and the scripted **Corral Gate** and **Gold Nugget** (see Gameplay scripting).
 
 ### Collision and solid tiles
 
@@ -202,7 +204,7 @@ The game is top-down with no gravity: up to four riders move freely and the runt
 - **Colliders.** Any entity can carry an axis-aligned box collider: offset and size relative to the entity, **solid** or **trigger**, **static** or **dynamic**. Static solids (crates, fences, walls) block riders and never move. Dynamic solids (riders, barrels) get pushed. Entities without a collider are scenery.
 - **Movement.** Each tick a rider moves X first, resolves against solid tiles and static solids, then Y, so pushing diagonally into a wall slides along it. A move longer than half the thinnest obstacle (half a tile, half a 4 px fence) is split into substeps, so nothing tunnels even at thousands of px/s. Riders stop flush: a 32 px rider stopped by a wall at x = 192 has its right edge at exactly 192.
 - **Dynamic vs dynamic.** After moving, overlapping dynamic bodies are pushed apart along the axis of least overlap, half each (a few passes), so riders never finish a tick inside one another and a rider can shove a barrel.
-- **Triggers.** A trigger collider never blocks. Each tick the World records enter / exit events for riders and dynamic bodies (exits before enters, each fired exactly once). The editor's Play status bar and the K overlay show the latest one ("Player rode into Gate (tick 171)"), and `ts_game` shows it in the window title. Triggers have no behaviour of their own yet: they are the hook for scripting.
+- **Triggers.** A trigger collider never blocks. Each tick the World records enter / exit events for riders and dynamic bodies (exits before enters, each fired exactly once). The editor's Play status bar and the K overlay show the latest one ("Player rode into Gate (tick 171)"), and `ts_game` shows it in the window title. A trigger has no behaviour of its own: scripts hook it with `on_trigger_enter` / `on_trigger_exit` (see Gameplay scripting), and every event also lands on the Telegraph.
 
 **Solid-tile workflow.** In the **Tile Palette**, solid tiles carry a red corner wedge. **Right-click** a tile to toggle it, or use the **Solid** checkbox next to the brush tile. Each toggle is one undo step ("Solid: Grass" / "Walkable: Grass"), autosaves `scene.json`, and applies to the tileset of the TileMap being painted (or the built-in palette).
 
@@ -244,7 +246,7 @@ Animation is data in `src/scene/Animation` and a per-tick system in `src/runtime
 
 Turning while walking keeps the stride (walk_right frame 2 becomes walk_down frame 2); stopping starts the idle from frame 0. Other animators play their start clip (the authored `clip`, else the default) and never switch on their own.
 
-**Playing a clip by name.** `World::play_clip(id, "tip_hat", restart = true, hold = false)` switches an animator to any clip in its set and returns false when there is no such clip. On a rider the next auto-pick takes over again unless `hold` is true; `World::release_clip(id)` hands it back. This is the hook scripting will call.
+**Playing a clip by name.** `World::play_clip(id, "tip_hat", restart = true, hold = false)` switches an animator to any clip in its set and returns false when there is no such clip. On a rider the next auto-pick takes over again unless `hold` is true; `World::release_clip(id)` hands it back. Scripts call it as `e:play(clip, hold)` / `e:release()`.
 
 **The Stable** (View -> Stable (Animation), tabbed beside the Tile Palette) is the animation-set panel:
 
@@ -285,20 +287,169 @@ Stable edits save straight to the `.anim.json` (they are not undo steps and do n
 - `mode` is `loop`, `once` or `ping_pong`. `default_clip` is the clip animators fall back to (empty = the first clip).
 - The writer is deterministic, with one clip per line. Unknown modes, duplicate clip names, a newer `version` or broken JSON are rejected with a reason, and the entity falls back to its sprite.
 
+### Gameplay scripting (Lua)
+
+Gameplay behaviour lives in small **Lua 5.4** files under `<project>/scripts/`. Any entity can carry a **script** component: the file plus its own property overrides. The same runtime (`src/runtime/Script*.cpp`, `World_Script.cpp`) runs them in the editor's Play mode and in `ts_game`, inside the World's fixed 60 Hz tick.
+
+**Why Lua.** TombStone is built for four riders on an authoritative server, so a script has to be something the server can run, bound and replay. Embedded Lua fits that:
+
+- **It is small and portable.** Lua 5.4.8 is about 30 C files with no dependencies. It is fetched by hash at configure time and compiled as C++, so script errors unwind through host destructors (no `longjmp`). The same code builds under MSVC, GCC and Clang.
+- **It is sandboxed by construction.** Only the base, table, string, math, utf8 and coroutine libraries are compiled in. The io, os, package and debug libraries are never built, and `load`, `dofile`, `loadfile`, `require`, `collectgarbage` and `string.dump` are gone. Scripts reach the world only through the API below: no files, no sockets, no clock.
+- **It is deterministic.** Hooks run on the tick, not the frame. `dt` is always 1/60 s, timers count ticks, and `math.random` is a seeded, replayable generator. The same scene with the same input gives the same ride, which is what a server needs to stay authoritative.
+- **It is bounded.** Each hook call has an instruction budget of 2,000,000 (an endless loop is cut off and reported). All scripts together share a 64 MB memory cap. A world can hold at most 4096 timers, and an entity at most 256 state keys.
+- **It is cheap to iterate on.** Save the file and the running ride picks it up (hot reload). Designers never rebuild the engine.
+
+Native C++ plugins would give up the sandbox and hot reload, and a home-made visual or DSL language would cost far more than Lua's cost to embed.
+
+**Attaching a script.** In the Inspector's **Script** section (under Gameplay), **Attach** a file from `scripts/`, switch **File**, **Open** it in your OS editor, or **Detach Script**. The props the file declares show up as typed fields: checkboxes for booleans, drag fields for numbers and text boxes for strings. An overridden prop shows in amber with a **default** button, and an override the file no longer declares is listed with **drop**. Attach, detach, file changes and every prop change are one undo step each and autosave `scene.json`; a whole drag or text edit is one step.
+
+**The Scripts panel** (View -> Scripts, tabbed beside the Supply Wagon) lists `scripts/**.lua`. **Write a script** takes a name and a template and writes `scripts/<name>.lua`; it never overwrites a file. The templates are:
+
+| Template | What it does |
+|---|---|
+| Blank | Every hook stubbed out |
+| Gate | Opens on the action button (the sample gate) |
+| Pickup | A rider through the trigger pockets it (the sample nugget) |
+| Sign | Shows a toast to whoever presses action beside it |
+| Ticker | Bobs up and down on a timer |
+
+Double-click a file (or **Open in Editor**) to hand it to the OS default editor (ShellExecute on Windows, `open` on macOS, `xdg-open` elsewhere). The panel shows "Rides clean." with the declared props, or the load error with file:line. **Attach to <selected>** puts the file on the selected entity. The panel stays live during Play.
+
+**Hot reload.** While riding, the editor checks `scripts/` twice a second (`ts_game` does the same). Each instance of a changed file re-runs its top level in place: props are re-applied, `self:get` state and timers are kept, and `on_reload()` is called if the file defines it. A save that does not compile keeps the old version running and puts the error on the Telegraph. An instance stopped by an error comes back once a fixed file is saved.
+
+**Errors never take the ride down.** A runtime error, an exhausted instruction budget or the memory cap is logged once, with file:line, as an **error** on the Telegraph:
+
+```
+[tick 1] [error] scripts/boom.lua:3: attempt to index a nil value (local 'saddle') -- Player's script is stopped; the rest of the world rides on
+```
+
+Only that entity's instance is stopped. Everything else, including other entities running the same file, keeps riding.
+
+**A script file:**
+
+```lua
+-- scripts/gate.lua: ride up close and press the action button.
+props = {                       -- defaults; the Inspector overrides per entity
+  open_line = "The gate creaks open.",
+  close_after = 0,
+  locked = false,
+}
+
+function on_start()
+  self:set("open", false)
+end
+
+function on_interact(rider)
+  if self:get("open", false) then return end
+  if props.locked then
+    rider:toast("Locked tight. Somebody's got the key.", 2)
+    return
+  end
+  self:set("open", true)
+  self:set_collider(false)      -- no more wall
+  self:hide()
+  log(self:name() .. " opened by P" .. rider:slot())
+  rider:toast(props.open_line, 2)
+  if props.close_after > 0 then
+    after(props.close_after, function()
+      self:set("open", false)
+      self:set_collider(true)
+      self:show()
+    end)
+  end
+end
+```
+
+Each entity gets its own instance of the file, with its own globals, its own `self` and its own `props`, so two gates running `gate.lua` never share a variable.
+
+**The sample content.** New scenes (and **Reset Scene Placeholders**) seed two scripted entities beside the rider, and write `scripts/gate.lua` and `scripts/gold.lua` if they are missing:
+
+- **Corral Gate.** A solid post that swings open when P1 presses the action button beside it.
+- **Gold Nugget.** A trigger. The first rider through it gets a "Picked up 10 gold (10 in the purse)" toast, a running `gold` tally in its state, and a log line, and the nugget leaves the world.
+
+The **action button** is E or Space on the keyboard and A on a gamepad. A tap shorter than a tick is latched until the next tick, so it is never lost at high frame rates. `on_interact` goes to the nearest scripted entity with `on_interact` whose collider (or rect) is within 24 px of the rider's.
+
+**Tick order.** Each tick, riders move and collide and triggers resolve. Then the script phase runs: `on_start` for newcomers, trigger exits and enters, `on_interact`, due timers, and finally `on_tick`. Spawned entities join at once and get `on_start` before their first `on_tick`; destroyed ones leave at the end of the script phase. Stop throws every bit of it away: hidden, moved, spawned and destroyed entities, state and timers are all gone, and the edit scene comes back untouched.
+
+#### Script API
+
+Hooks (define any of them):
+
+| Hook | When |
+|---|---|
+| `on_start()` | The entity's first tick in the world |
+| `on_tick(dt)` | Every tick, `dt` = 1/60 |
+| `on_trigger_enter(other)` / `on_trigger_exit(other)` | A rider or dynamic body crosses this entity's trigger collider |
+| `on_interact(rider)` | A rider pressed the action button within reach |
+| `on_reload()` | The file was hot-reloaded mid-ride |
+
+Globals: `self` (this entity), `props` (declared defaults merged with the Inspector's overrides) and the following functions:
+
+| Function | Does |
+|---|---|
+| `log(...)` / `print(...)` | Info line on the Telegraph, tagged with file:line and the entity |
+| `warn(...)` | Warning line (amber, counts on the badge) |
+| `toast(text [, seconds])` | HUD card for every rider (default 2.5 s) |
+| `after(seconds, fn)` / `every(seconds, fn)` | One-shot / repeating timer on the tick clock (at least one tick); returns an id |
+| `cancel(id)` | Cancel one of this entity's timers; true when it was pending |
+| `find(name)` | First entity with that name, or nil |
+| `player([slot])` | The rider on slot 1-4 (default 1), or nil |
+| `spawn(name, x, y)` | Copy of the authored entity `name` at x/y (script included); returns it |
+| `duplicate(e [, x, y])` | Copy of a live entity, in place or at x/y |
+| `tick()` / `time()` | World tick / seconds of ride time (tick / 60) |
+| `math.random`, `math.randomseed` | Replayable generator, seeded the same for every ride |
+
+Entity methods (`self`, `other`, `rider`, anything `find` returns):
+
+| Method | Does |
+|---|---|
+| `e:id()`, `e:name()`, `e:alive()` | Identity; `alive()` is false once destroyed |
+| `e:pos()`, `e:center()`, `e:size()` | x, y (top-left) / centre / w, h |
+| `e:set_pos(x, y)`, `e:move_by(dx, dy)` | Teleport (no collision sweep) |
+| `e:show()`, `e:hide()`, `e:visible()` | Draw it or not |
+| `e:set_collider(on)`, `e:collider_on()` | Park / restore its collider (walls, triggers) |
+| `e:play(clip [, hold])`, `e:release()` | Play an animation clip (`hold` keeps a rider off its auto walk / idle) / hand back |
+| `e:get(key [, default])`, `e:set(key, value)` | Per-entity state: booleans, numbers, strings; `nil` clears |
+| `e:destroy()` | Leaves the world at the end of the script phase |
+| `e:is_player()`, `e:slot()` | Is it a rider? Its slot, 1-4 |
+| `e:toast(text [, seconds])` | HUD card for that rider only (everyone when it is not a rider) |
+| `e:spawned()` | Made by `spawn` / `duplicate` during this ride |
+
+Methods on a destroyed entity do nothing and return nothing (`alive()` and `spawned()` say false); bad arguments raise an error at the calling line.
+
+### The Telegraph (console)
+
+The **Telegraph** (View -> Telegraph (Console), docked along the bottom of the Viewport) is the single log that the world, its scripts and the editor write to:
+
+- **Script lines** come from `log` / `warn` and errors, with file:line.
+- **Toasts** appear as `toast: P1: ...`.
+- **Trigger events** appear as `trigger: Player rode into Gold Nugget`.
+- **Editor notes** are every status-bar message ("Hot-reloaded 1 script mid-ride", "Undid: Move 3", autosave failures as warnings).
+
+World lines carry their tick: `[tick 99] [info] scripts/gate.lua:32: Corral Gate opened by P1`.
+
+- **Info / Warn / Error** toggle each level and show its count. **Search the wire...** filters case-insensitively. **Clear** empties the log. **Auto-scroll** follows new lines unless you have scrolled up.
+- **Click a line** to pick out the entity it concerns: it is selected in the Hierarchy and Inspector and, when not riding, framed in the Viewport. A line from an entity that only existed during the ride says so.
+- **The status-bar badge** reads `Telegraph`, `Telegraph: 2 warnings` or `Telegraph: 1 error` (amber / red) for lines you have not seen yet. Clicking it opens the panel.
+- The log keeps the last 5000 lines and starts fresh for each project. The editor also echoes world lines to stdout as `[Telegraph] ...`.
+
+`ts_game` prints the same lines to stdout as `[telegraph] [tick 8] [info] ...`. With `--log <file>` it also writes them to that file (overwritten on each run), and the final line notes how many script errors the ride had.
+
 ### ts_game (the standalone game)
 
 ```bash
 ./build/apps/game/ts_game --project ./build/apps/admin/TombStoneProjects/sample-2d-platformer
 ./build/apps/game/ts_game --smoke --project <dir>    # headless: load, ride 60 ticks, verify, exit
+./build/apps/game/ts_game --project <dir> --log ride.log   # also keep the Telegraph in ride.log
 ```
 
-`ts_game` opens its own GLFW window (1280x720, resizable), loads `<project>/scene.json`, its images and `.anim.json` sets through the runtime, and draws tilemaps and (animated) sprites with a small fixed-function OpenGL renderer (no ImGui, no editor code). Keys: WASD / arrows (and gamepads 1-4) ride, P or F6 pause, F10 step while paused, R or F5 reload `scene.json` from disk, K collision overlay (same colours as the editor; `--collision` starts with it on), Esc quit. The title bar shows P1's position and the latest trigger event. The editor's **Launch Game** finds `ts_game` next to `ts_admin` or in the build tree (`build/apps/game/`); if it isn't built it says so (configure with `-DTS_BUILD_GAME=ON`).
+`ts_game` opens its own GLFW window (1280x720, resizable), loads `<project>/scene.json`, its images and `.anim.json` sets through the runtime, and draws tilemaps and (animated) sprites with a small fixed-function OpenGL renderer (no ImGui, no editor code). Keys: WASD / arrows (and gamepads 1-4) ride, E / Space (pad A) action, P or F6 pause, F10 step while paused, R or F5 reload `scene.json` from disk, K collision overlay (same colours as the editor; `--collision` starts with it on), Esc quit. The title bar shows P1's position and the latest trigger event. Script toasts draw as leather cards at the bottom of the window, newest lowest and fading out, tagged `P2:` when more than one rider is in, using the public-domain [stb_easy_font](https://github.com/nothings/stb) (no font files are shipped). Scripts hot-reload twice a second when their files change. The editor's **Launch Game** finds `ts_game` next to `ts_admin` or in the build tree (`build/apps/game/`); if it isn't built it says so (configure with `-DTS_BUILD_GAME=ON`).
 
-**Runtime architecture.** `src/scene` owns the data (Entity2D and its optional components, tilemaps, the scene.json reader/writer) and `src/runtime` owns the game: a `World` built from a copy of the entities, advanced by a `PlaySession` at a fixed 60 Hz (accumulator, at most 8 catch-up ticks per frame) from an abstract per-player `InputFrame` (move x/y + action buttons for slots 0-3), with a follow camera and a renderer-neutral draw list (world-space quads + UVs) interpolated between ticks. Neither library knows about ImGui or OpenGL: the editor feeds it keyboard/gamepad input and draws the list with ImGui, `ts_game` feeds GLFW input and draws it with OpenGL, and `--smoke` feeds scripted input. Collision and animation run inside the World's tick (see above). Scripting and networked players (a local server plus up to four clients) slot in as more per-tick systems and more `InputFrame` sources without touching the editor.
+**Runtime architecture.** `src/scene` owns the data (Entity2D and its optional components, tilemaps, the scene.json reader/writer) and `src/runtime` owns the game: a `World` built from a copy of the entities, advanced by a `PlaySession` at a fixed 60 Hz (accumulator, at most 8 catch-up ticks per frame) from an abstract per-player `InputFrame` (move x/y + action buttons for slots 0-3), with a follow camera and a renderer-neutral draw list (world-space quads + UVs) interpolated between ticks. Neither library knows about ImGui or OpenGL: the editor feeds it keyboard/gamepad input and draws the list with ImGui, `ts_game` feeds GLFW input and draws it with OpenGL, and `--smoke` feeds scripted input. Collision, animation and scripts all run inside the World's tick. Networked players (a local server plus up to four clients) will slot in as more `InputFrame` sources without touching the editor.
 
 ### scene.json format
 
-`"version": 5` (current). Every entity has id/name, x/y/w/h, r/g/b/a and layer, plus optional component objects. Version 2 added `tilemap` and `sprite`, version 3 added the gameplay components `player`, `camera` and `spawn`, version 4 added `collider` and the top-level `tile_solidity`, and version 5 adds `animator`:
+`"version": 6` (current). Every entity has id/name, x/y/w/h, r/g/b/a and layer, plus optional component objects. Version 2 added `tilemap` and `sprite`, version 3 added the gameplay components `player`, `camera` and `spawn`, version 4 added `collider` and the top-level `tile_solidity`, version 5 added `animator`, and version 6 adds `script`:
 
 ```json
 "tilemap": {"cols": 8, "rows": 2, "tile_size": 32, "tileset": "", "encoding": "rle", "data": "8*4,8*1"},
@@ -307,8 +458,11 @@ Stable edits save straight to the `.anim.json` (they are not undo steps and do n
 "camera": {"target": 2, "smoothing": 0.15, "zoom": 1, "use_bounds": false, "bounds_x": 0, "bounds_y": 0, "bounds_w": 1024, "bounds_h": 768},
 "spawn": {"slot": 0},
 "collider": {"x": 0, "y": 0, "w": 32, "h": 48, "type": "solid", "body": "dynamic"},
-"animator": {"set": "assets/rider.anim.json", "clip": "", "default_clip": "", "speed": 1, "playing": true}
+"animator": {"set": "assets/rider.anim.json", "clip": "", "default_clip": "", "speed": 1, "playing": true},
+"script": {"path": "scripts/gate.lua", "props": [{"name": "locked", "bool": false}, {"name": "open_line", "text": "Swing wide."}]}
 ```
+
+`script.path` is project-relative under `scripts/` and ends in `.lua`. `props` holds only this entity's overrides, sorted by name, each typed as `bool`, `number` or `text`. A prop left at the file's default is not written.
 
 `collider` x/y are the offset from the entity's top-left corner, `type` is `solid` or `trigger`, and `body` is `static` or `dynamic`. The scene's `tile_solidity` lists the solid tile ids of each tileset that differs from the defaults (`""` = the built-in palette). A listed tileset uses exactly its list, and a toggle that brings a tileset back to its defaults drops its entry:
 
@@ -319,7 +473,7 @@ Stable edits save straight to the `.anim.json` (they are not undo steps and do n
 ]
 ```
 
-Older files still load: a v1 entity named `TileMap*` becomes an empty 32 px grid covering its old rect, and a v1/v2 scene with no gameplay components gets a P1 controller on the entity named `Player` and a follow camera on `Camera2D` (targeting Player), so old projects play straight away. A v1-v3 scene gives every `player` entity a default dynamic collider (its whole rect) and starts with default tile solidity. A v4 rider without a collider stays a ghost. v1-v4 files load with no animators (nothing is added). The file is written as v5 on the next save.
+Older files still load: a v1 entity named `TileMap*` becomes an empty 32 px grid covering its old rect, and a v1/v2 scene with no gameplay components gets a P1 controller on the entity named `Player` and a follow camera on `Camera2D` (targeting Player), so old projects play straight away. A v1-v3 scene gives every `player` entity a default dynamic collider (its whole rect) and starts with default tile solidity. A v4 rider without a collider stays a ghost. v1-v4 files load with no animators, and v1-v5 files with no scripts (nothing is added). The file is written as v6 on the next save.
 
 `data` is row-major run-length text: comma-separated `count*id` runs (a single cell is just `id`).
 
@@ -329,11 +483,34 @@ Collision `--smoke`: a rider stops flush on a solid tile with zero speed, slides
 
 Animation `--smoke`: clip timing is checked tick by tick at 60 Hz for loop, once (finishes on the right tick), ping-pong and per-frame `ms`. It also checks the `.anim.json` byte-identical roundtrip, its layout and rejects, the grid slice, library reload on change, and v4 -> v5 (a v4 scene loads untouched; animators roundtrip). The runtime half rides a 4-direction set and a right-only set. Each heading picks the right walk clip and idle keeps it. It checks diagonals, a stride kept through a turn, left drawn as mirrored right (with flipped UVs in the draw list), `play_clip` hold / release, pause, speed and the missing-set fallback. The editor half opens a fresh project: the rider sheet and set are seeded, the preview frames are checked, and animator edits are one undo step each with `scene.json` in sync through undo / redo / remove. Play walks right through at least three frame changes, then idles facing right, animator edits are locked, and Stop restores the workspace and `scene.json` byte for byte. It also checks animated and plain Supply Wagon drops, and Stable slice / add / rename / timing / range / default / delete landing in the `.anim.json` with no undo steps. `ts_game --smoke` rides P1 right and requires the drawn rider frame to change within `walk_right`.
 
+Scripting `--smoke` has three parts:
+
+- **Data.** The v6 `script` component roundtrips with typed props, a v5 scene loads untouched, and malformed script objects are refused.
+- **Runtime.** It drives the Lua host headless. Hooks fire on the right ticks (start, tick, trigger enter / exit, the action-button interact), and the API is exercised: move, show / hide, collider, state, spawn / duplicate / destroy, clips and toasts. `after` / `every` / `cancel` timers fire on the right ticks. Errors are logged with file:line and stop only their instance: a nil index, an endless loop cut off by the budget, the 64 MB cap, a syntax error and a missing file. `io`, `os`, `load` and friends are absent. Hot reload works from memory and from disk, a broken save keeps the old script, a fixed save revives it, and `math.random` replays identically.
+- **Editor.** It opens a fresh project with the seeded gate and nugget. Inspector prop overrides are one undo step each, with `scene.json` in sync through undo / redo. It writes a script from a template (refusing clobbers and bad names) and attaches it with undo. Then it rides:
+  - a script that errors every tick logs `boom.lua:3` exactly once and only that instance stops;
+  - the nugget is pocketed with trigger, toast and `gold.lua:15` lines on the Telegraph, and clicking the line selects the nugget;
+  - an action tap on a frame too short for a tick still opens the gate on the next tick, with the Inspector's `open_line`;
+  - a saved edit hot-reloads, and a broken save logs file:line and lights the badge;
+  - Stop puts back everything the scripts hid, opened or destroyed, with the workspace and `scene.json` byte-identical.
+
+  The Telegraph's level filters, search and clear are checked last.
+
+`ts_game --smoke` rides the sample headless: it pockets the nugget, is stopped by the shut gate, presses action, and rides through. It prints the Telegraph lines it expects:
+
+```
+[telegraph] [tick 8] [info] trigger: Player rode into Gold Nugget
+[telegraph] [tick 8] [info] toast: P1: Picked up 10 gold (10 in the purse)
+[telegraph] [tick 8] [info] scripts/gold.lua:15: P1 picked up 10 gold at Gold Nugget
+[telegraph] [tick 99] [info] scripts/gate.lua:32: Corral Gate opened by P1
+[telegraph] [tick 99] [info] toast: P1: The gate creaks open.
+```
+
 The editor `--smoke` also paints a multi-cell stroke and checks it is one undo step, a 2x2 brush, erase, a cancelled stroke, bucket fill, rect fill/erase, eyedropper, resize (keeps tiles; undo restores cut cells), tile size, undo-all / redo-all with `scene.json` in sync, the v2 RLE roundtrip, the v1 upgrade, sprite drop-create / assign / flip / source-rect roundtrip with undo/redo, missing and corrupt image fallbacks, tileset slicing, and import.
 
 ### Building admin with ImGui
 
-Admin pulls **GLFW 3.4**, **Dear ImGui (docking branch)** and the single **stb_image.h** header via CMake `FetchContent` (`cmake/FetchImGuiDeps.cmake`); `ts_game` uses the same GLFW and stb_image (no ImGui). Downloaded sources live under the build directory (`build/_deps/...`) and are gitignored — they are **not** committed.
+Admin pulls **GLFW 3.4**, **Dear ImGui (docking branch)** and the single **stb_image.h** header via CMake `FetchContent` (`cmake/FetchImGuiDeps.cmake`); `ts_game` uses the same GLFW and stb_image (no ImGui). `ts_game` also pulls the public-domain **stb_easy_font.h** for its HUD toasts. Every build that includes the runtime (`ts_admin`, `ts_game`) pulls **Lua 5.4.8** from lua.org, pinned by SHA-256 (`cmake/FetchLua.cmake`). It is compiled as C++ with only the core and pure libraries, so it needs nothing beyond the C++ toolchain on MSVC, GCC or Clang. Downloaded sources live under the build directory (`build/_deps/...`) and are gitignored — they are **not** committed.
 
 Requirements (in addition to C++20):
 
