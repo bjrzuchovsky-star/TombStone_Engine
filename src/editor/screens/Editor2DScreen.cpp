@@ -30,6 +30,11 @@ Editor2DScreen::Editor2DScreen(ProjectInfo project)
     : project_(std::move(project)) {}
 
 void Editor2DScreen::on_enter() {
+  // A fresh visit never starts mid-ride.
+  play_.stop();
+  play_backup_.reset();
+  play_free_cam_ = false;
+  play_focus_viewport_ = false;
   quit_requested_ = false;
   back_requested_ = false;
   renaming_ = false;
@@ -91,6 +96,10 @@ void Editor2DScreen::on_enter() {
 }
 
 void Editor2DScreen::on_exit() {
+  // Leaving mid-ride: drop the run and put the edit scene back first.
+  if (is_playing()) {
+    stop_play();
+  }
   cancel_rename();
   if (stroke_active()) {
     end_paint_stroke();
@@ -123,6 +132,13 @@ void Editor2DScreen::mark_dirty_and_autosave() {
 }
 
 bool Editor2DScreen::save_scene(std::string* error_out) {
+  if (is_playing()) {
+    // Play mode never writes scene.json; the edit scene is parked as-is.
+    if (error_out) {
+      *error_out = "Not while riding. Stop play (F5) to save.";
+    }
+    return false;
+  }
   if (project_.path.empty()) {
     if (error_out) {
       *error_out = "Project path is empty; cannot save scene.json";
@@ -181,6 +197,9 @@ bool Editor2DScreen::flush_pending_edit() {
 }
 
 std::uint64_t Editor2DScreen::create_entity(std::string name) {
+  if (is_playing()) {
+    return 0;  // edit tools are locked while playing
+  }
   cancel_rename();
   Workspace2D::Snapshot before = prepare_edit();
   const std::uint64_t id = workspace_.create_entity(std::move(name));
@@ -196,6 +215,9 @@ std::uint64_t Editor2DScreen::create_entity(std::string name) {
 }
 
 std::size_t Editor2DScreen::duplicate_selected() {
+  if (is_playing()) {
+    return 0;
+  }
   cancel_rename();
   Workspace2D::Snapshot before = prepare_edit();
   const std::vector<std::uint64_t> ids = workspace_.duplicate_selection();
@@ -211,6 +233,9 @@ std::size_t Editor2DScreen::duplicate_selected() {
 }
 
 std::size_t Editor2DScreen::delete_selected() {
+  if (is_playing()) {
+    return 0;
+  }
   cancel_rename();
   if (workspace_.move_active()) {
     workspace_.cancel_move();
@@ -229,6 +254,9 @@ std::size_t Editor2DScreen::delete_selected() {
 }
 
 bool Editor2DScreen::snap_selected_to_grid() {
+  if (is_playing()) {
+    return false;
+  }
   Workspace2D::Snapshot before = prepare_edit();
   if (!workspace_.snap_selection_to_grid()) {
     return false;
@@ -240,6 +268,9 @@ bool Editor2DScreen::snap_selected_to_grid() {
 }
 
 void Editor2DScreen::reset_scene_placeholders() {
+  if (is_playing()) {
+    return;
+  }
   cancel_rename();
   Workspace2D::Snapshot before = prepare_edit();
   workspace_.reset_defaults();
@@ -250,6 +281,9 @@ void Editor2DScreen::reset_scene_placeholders() {
 }
 
 bool Editor2DScreen::nudge_selected(int dir_x, int dir_y, bool large) {
+  if (is_playing()) {
+    return false;
+  }
   const double now = now_seconds();
   // A different source, or a different set of entities, starts a new step.
   if (edit_source_ != EditSource::Nudge ||
@@ -272,6 +306,9 @@ bool Editor2DScreen::nudge_selected(int dir_x, int dir_y, bool large) {
 }
 
 void Editor2DScreen::begin_drag_move() {
+  if (is_playing()) {
+    return;
+  }
   flush_pending_edit();
   workspace_.begin_edit("Move");
   edit_source_ = EditSource::Drag;
@@ -303,6 +340,9 @@ void Editor2DScreen::cancel_drag_move() {
 }
 
 void Editor2DScreen::begin_inspector_edit(const char* label) {
+  if (is_playing()) {
+    return;
+  }
   if (edit_source_ == EditSource::Inspector && workspace_.edit_open()) {
     workspace_.set_edit_label(label);
     return;
@@ -344,6 +384,10 @@ void Editor2DScreen::track_inspector_item(const char* label) {
 }
 
 bool Editor2DScreen::undo() {
+  if (is_playing()) {
+    note("Undo waits until the ride is over (F5 stops).");
+    return false;
+  }
   if (drag_mode_ != DragMode::None) {
     return false;  // mid-drag: finish or Esc first
   }
@@ -366,6 +410,9 @@ bool Editor2DScreen::undo() {
 }
 
 bool Editor2DScreen::redo() {
+  if (is_playing()) {
+    return false;
+  }
   if (drag_mode_ != DragMode::None) {
     return false;
   }
@@ -425,7 +472,9 @@ AppState Editor2DScreen::on_update(float /*delta_seconds*/) {
   if (ImGui::GetCurrentContext() != nullptr) {
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_S)) {
       std::string err;
-      if (!save_scene(&err) && !err.empty()) {
+      if (is_playing()) {
+        note("Not while riding. Stop play (F5) to save.");
+      } else if (!save_scene(&err) && !err.empty()) {
         std::cout << "[Editor2D] save failed: " << err << '\n';
       }
     }

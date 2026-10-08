@@ -10,6 +10,7 @@
 #include <cstring>
 #include <iostream>
 #include <optional>
+#include <string>
 #include <vector>
 
 namespace ts {
@@ -103,15 +104,29 @@ void Editor2DScreen::draw_hierarchy() {
       }
       ImGui::TreeNodeEx(reinterpret_cast<void*>(static_cast<uintptr_t>(e.id)),
                         flags, "%s", e.name.c_str());
+      std::string tag;
       if (e.tilemap || e.sprite) {
+        tag = e.tilemap ? "tiles" : "sprite";
+      }
+      // Gameplay tags: rider slot, camera, spawn slot.
+      if (e.player) {
+        tag += (tag.empty() ? "P" : " P") + std::to_string(e.player->slot + 1);
+      }
+      if (e.camera) {
+        tag += tag.empty() ? "cam" : " cam";
+      }
+      if (e.spawn) {
+        tag += (tag.empty() ? "spawn P" : " spawn P") +
+               std::to_string(e.spawn->slot + 1);
+      }
+      if (!tag.empty()) {
         // Component tag, right-aligned in the row.
-        const char* tag = e.tilemap ? "tiles" : "sprite";
         const ImVec2 mx = ImGui::GetItemRectMax();
         const ImVec2 mn = ImGui::GetItemRectMin();
-        const float tw = ImGui::CalcTextSize(tag).x;
+        const float tw = ImGui::CalcTextSize(tag.c_str()).x;
         ImGui::GetWindowDrawList()->AddText(
             ImVec2(mx.x - tw - 6.0f, mn.y + ImGui::GetStyle().FramePadding.y),
-            theme::U32(theme::TextMuted()), tag);
+            theme::U32(theme::TextMuted()), tag.c_str());
       }
       if (primary) {
         const ImVec2 mn = ImGui::GetItemRectMin();
@@ -331,6 +346,10 @@ void Editor2DScreen::draw_inspector() {
     // coalesced edit above, so re-fetch the entity afterwards.
     const std::uint64_t eid = e->id;
     draw_inspector_components(*e);
+    // Player / Camera2D / Spawn Point (same re-fetch rule).
+    if (workspace_.find(eid)) {
+      draw_inspector_gameplay(eid);
+    }
     e = workspace_.find(eid);
   }
 
