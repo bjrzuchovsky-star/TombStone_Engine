@@ -26,6 +26,11 @@ class GameRenderer {
   void render(const runtime::WorldRect& view, int framebuffer_w,
               int framebuffer_h, const std::vector<runtime::DrawQuad>& quads);
 
+  // K overlay, drawn over the last render() with the same view: solid
+  // tiles red, static solids copper, dynamic bodies green, triggers gold
+  // with a cross (shaded while somebody is inside).
+  void render_overlay(const std::vector<runtime::OverlayBox>& boxes);
+
   // Re-decode images changed on disk (throttled by the cache).
   void poll_changes(double now) { textures_.poll_changes(now); }
   void clear() { textures_.clear(); }

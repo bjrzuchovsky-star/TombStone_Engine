@@ -38,17 +38,20 @@ namespace fs = std::filesystem;
 using game::GameRenderer;
 
 constexpr const char* kUsage =
-    "Usage: ts_game --project <dir> [--smoke] [--frames N]\n"
+    "Usage: ts_game --project <dir> [--smoke] [--frames N] [--collision]\n"
     "  --project <dir>  TombStone project folder (holds scene.json)\n"
     "  --smoke          headless check: load, ride 60 ticks, verify, exit\n"
     "  --frames N       quit after N rendered frames (testing)\n"
+    "  --collision      start with the collision overlay on (K)\n"
     "Keys: WASD / arrows move P1 | gamepads ride P1-P4 | P or F6 pause |\n"
-    "      F10 step while paused | R or F5 reload scene.json | Esc quit\n";
+    "      F10 step while paused | R or F5 reload scene.json |\n"
+    "      K collision overlay | Esc quit\n";
 
 struct Options {
   std::string project;
   bool smoke = false;
   long frames = -1;
+  bool collision = false;
   bool help = false;
 };
 
@@ -61,6 +64,8 @@ bool parse_args(int argc, char** argv, Options* out, std::string* err) {
       out->smoke = true;
     } else if (a == "--frames" && i + 1 < argc) {
       out->frames = std::strtol(argv[++i], nullptr, 10);
+    } else if (a == "--collision") {
+      out->collision = true;
     } else if (a == "--help" || a == "-h") {
       out->help = true;
     } else {
@@ -219,6 +224,22 @@ int run_smoke(const std::string& dir) {
     return fail("nothing to draw around the camera");
   }
 
+  // K overlay over the same view: P1's collider is there, solid tiles
+  // come from the project's tile_solidity.
+  std::vector<runtime::OverlayBox> boxes;
+  world.build_overlay(runtime::World::view_rect(cam, 1280.0f, 720.0f),
+                      session.alpha(), &boxes);
+  int solid_tiles = 0;
+  bool rider_box = false;
+  for (const runtime::OverlayBox& b : boxes) {
+    solid_tiles += b.kind == runtime::OverlayKind::SolidTile ? 1 : 0;
+    rider_box |= rider && b.entity == rider->data.id;
+  }
+  if (rider && rider->data.collider && !rider_box) {
+    return fail("collision overlay is missing P1's collider");
+  }
+  const std::uint64_t trigger_events = world.trigger_event_total();
+
   // Pause holds; a step is one tick.
   session.pause();
   const std::uint64_t t = session.tick();
@@ -232,13 +253,18 @@ int run_smoke(const std::string& dir) {
   }
   std::cout << "[smoke] ts_game OK (\"" << project_name(dir) << "\": "
             << actor_count << " actors, " << ride << ", "
-            << quads.size() << " quads, scene.json untouched)\n";
+            << quads.size() << " quads, K overlay " << boxes.size()
+            << (boxes.size() == 1 ? " box" : " boxes") << " ("
+            << solid_tiles << " solid tile run" << (solid_tiles == 1 ? "" : "s")
+            << "), " << trigger_events << " trigger event"
+            << (trigger_events == 1 ? "" : "s") << ", scene.json untouched)\n";
   return 0;
 }
 
 struct GameState {
   runtime::PlaySession session;
   bool reload = false;
+  bool show_collision = false;
 };
 
 void on_key(GLFWwindow* win, int key, int /*scancode*/, int action,
@@ -257,6 +283,10 @@ void on_key(GLFWwindow* win, int key, int /*scancode*/, int action,
   } else if ((key == GLFW_KEY_R || key == GLFW_KEY_F5) && !repeat &&
              (mods & GLFW_MOD_CONTROL) == 0) {
     g->reload = true;
+  } else if (key == GLFW_KEY_K && !repeat) {
+    g->show_collision = !g->show_collision;
+    std::cout << "[ts_game] collision overlay "
+              << (g->show_collision ? "on" : "off") << '\n';
   }
 }
 
@@ -289,6 +319,7 @@ int run_window(const Options& opt) {
   {
     GameRenderer renderer(opt.project);
     GameState g;
+    g.show_collision = opt.collision;
     std::string err;
     if (!g.session.start_project(opt.project, &err)) {
       std::cerr << "[ts_game] " << err << '\n';
@@ -301,6 +332,7 @@ int run_window(const Options& opt) {
                 << g.session.world().player_count() << " rider(s)\n";
 
       std::vector<runtime::DrawQuad> quads;
+      std::vector<runtime::OverlayBox> boxes;
       double last = glfwGetTime();
       double title_at = last;
       long frames = 0;
@@ -338,19 +370,32 @@ int run_window(const Options& opt) {
               },
               &quads);
           renderer.render(view, fw, fh, quads);
+          if (g.show_collision) {
+            world.build_overlay(view, alpha, &boxes);
+            renderer.render_overlay(boxes);
+          }
           glfwSwapBuffers(win);
         }
         if (now - title_at >= 0.5) {
           title_at = now;
-          char title[256];
-          const runtime::Actor* p1 = g.session.world().player(0);
+          char title[384];
+          const runtime::World& world = g.session.world();
+          const runtime::Actor* p1 = world.player(0);
+          // Last trigger event rides along in the title bar.
+          std::string event;
+          if (const auto& ev = world.last_trigger_event()) {
+            event = " | " + world.describe(*ev) + " (tick " +
+                    std::to_string(ev->tick) + ")";
+          }
           std::snprintf(title, sizeof(title),
-                        "%s | TombStone | %s | %.0f ticks/s | P1 %.0f, %.0f",
+                        "%s | TombStone | %s | %.0f ticks/s | P1 %.0f, %.0f%s%s",
                         name.c_str(),
                         g.session.paused() ? "HOLDING UP (P)" : "riding",
                         g.session.ticks_per_second(),
                         p1 ? static_cast<double>(p1->data.x) : 0.0,
-                        p1 ? static_cast<double>(p1->data.y) : 0.0);
+                        p1 ? static_cast<double>(p1->data.y) : 0.0,
+                        g.show_collision ? " | collision (K)" : "",
+                        event.c_str());
           glfwSetWindowTitle(win, title);
         }
         if (opt.frames >= 0 && ++frames >= opt.frames) {

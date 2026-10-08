@@ -39,6 +39,34 @@ void missing_cross(float x0, float y0, float x1, float y1) {
   glEnd();
 }
 
+// Overlay colours, matching the editor's K overlay (Danger, Copper,
+// Success, Warning).
+void overlay_color(runtime::OverlayKind kind, float alpha) {
+  switch (kind) {
+    case runtime::OverlayKind::SolidTile:
+      glColor4f(0.808f, 0.290f, 0.251f, alpha);
+      break;
+    case runtime::OverlayKind::StaticSolid:
+      glColor4f(0.722f, 0.384f, 0.220f, alpha);
+      break;
+    case runtime::OverlayKind::DynamicSolid:
+      glColor4f(0.541f, 0.690f, 0.408f, alpha);
+      break;
+    case runtime::OverlayKind::Trigger:
+      glColor4f(0.925f, 0.690f, 0.337f, alpha);
+      break;
+  }
+}
+
+void outline(float x0, float y0, float x1, float y1) {
+  glBegin(GL_LINE_LOOP);
+  glVertex2f(x0, y0);
+  glVertex2f(x1, y0);
+  glVertex2f(x1, y1);
+  glVertex2f(x0, y1);
+  glEnd();
+}
+
 }  // namespace
 
 GameRenderer::GameRenderer(std::string project_dir)
@@ -103,6 +131,31 @@ void GameRenderer::render(const runtime::WorldRect& view, int framebuffer_w,
       }
     }
   }
+}
+
+void GameRenderer::render_overlay(
+    const std::vector<runtime::OverlayBox>& boxes) {
+  glDisable(GL_TEXTURE_2D);
+  // Washes first so every outline sits on top.
+  for (const runtime::OverlayBox& b : boxes) {
+    const bool lit = b.kind == runtime::OverlayKind::Trigger && b.active;
+    overlay_color(b.kind, lit ? 0.35f : 0.14f);
+    solid_quad(b.x0, b.y0, b.x1, b.y1);
+  }
+  glLineWidth(2.0f);
+  for (const runtime::OverlayBox& b : boxes) {
+    overlay_color(b.kind, 0.95f);
+    outline(b.x0, b.y0, b.x1, b.y1);
+    if (b.kind == runtime::OverlayKind::Trigger) {
+      glBegin(GL_LINES);
+      glVertex2f(b.x0, b.y0);
+      glVertex2f(b.x1, b.y1);
+      glVertex2f(b.x1, b.y0);
+      glVertex2f(b.x0, b.y1);
+      glEnd();
+    }
+  }
+  glLineWidth(1.0f);
 }
 
 }  // namespace game
