@@ -1,6 +1,8 @@
 #include "core/Engine.h"
 #include "editor/AppFlow.h"
 #include "editor/AppState.h"
+#include "editor/assets/AssetLibrary.h"
+#include "editor/assets/TextureCache.h"
 #include "editor/screens/Editor2DScreen.h"
 #include "editor/settings/Settings.h"
 #include "editor/workspace/SceneIO.h"
@@ -15,11 +17,15 @@
 // GLFW will pull platform OpenGL headers (do not define GLFW_INCLUDE_NONE here).
 #include <GLFW/glfw3.h>
 
+#include <algorithm>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -33,6 +39,78 @@ using editor::SettingsStore;
 
 void apply_theme(const Settings& settings) {
   editor::theme::Apply(settings.theme);
+}
+
+#ifndef GL_CLAMP_TO_EDGE
+#define GL_CLAMP_TO_EDGE 0x812F  // GL 1.2; Windows' gl.h stops at 1.1
+#endif
+
+// OpenGL side of the editor's renderer-agnostic texture cache. Only GL 1.1
+// entry points, so the stock opengl32 / libGL exports are enough.
+class GlTextureUploader final : public editor::TextureUploader {
+ public:
+  std::uint64_t upload_rgba(const unsigned char* pixels, int width,
+                            int height) override {
+    if (!pixels || width <= 0 || height <= 0) {
+      return 0;
+    }
+    GLint prev = 0;
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &prev);
+    GLuint tex = 0;
+    glGenTextures(1, &tex);
+    if (tex == 0) {
+      return 0;
+    }
+    glBindTexture(GL_TEXTURE_2D, tex);
+    // Nearest: pixel art and tile slices stay crisp when zoomed.
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA,
+                 GL_UNSIGNED_BYTE, pixels);
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(prev));
+    return static_cast<std::uint64_t>(tex);
+  }
+  void destroy(std::uint64_t handle) override {
+    const GLuint tex = static_cast<GLuint>(handle);
+    if (tex != 0) {
+      glDeleteTextures(1, &tex);
+    }
+  }
+};
+
+// Tiny uncompressed 32-bit TGA writer so --smoke can make test images
+// without any extra dependency (stb_image decodes TGA).
+bool write_test_tga(const std::filesystem::path& path, int w, int h,
+                    std::uint32_t (*pixel)(int x, int y)) {
+  std::ofstream out(path, std::ios::binary | std::ios::trunc);
+  if (!out) {
+    return false;
+  }
+  unsigned char header[18] = {};
+  header[2] = 2;  // uncompressed true-colour
+  header[12] = static_cast<unsigned char>(w & 0xff);
+  header[13] = static_cast<unsigned char>((w >> 8) & 0xff);
+  header[14] = static_cast<unsigned char>(h & 0xff);
+  header[15] = static_cast<unsigned char>((h >> 8) & 0xff);
+  header[16] = 32;
+  header[17] = 0x28;  // top-left origin, 8 alpha bits
+  out.write(reinterpret_cast<const char*>(header), sizeof(header));
+  for (int y = 0; y < h; ++y) {
+    for (int x = 0; x < w; ++x) {
+      const std::uint32_t rgba = pixel(x, y);
+      const unsigned char bgra[4] = {
+          static_cast<unsigned char>((rgba >> 8) & 0xff),
+          static_cast<unsigned char>((rgba >> 16) & 0xff),
+          static_cast<unsigned char>((rgba >> 24) & 0xff),
+          static_cast<unsigned char>(rgba & 0xff)};
+      out.write(reinterpret_cast<const char*>(bgra), 4);
+    }
+  }
+  return static_cast<bool>(out);
 }
 
 int run_console_smoke() {
@@ -523,6 +601,420 @@ int run_console_smoke() {
               << editor::Workspace2D::kMaxHistory << ")\n";
   }
 
+  // TileMap painting + sprites/assets through the screen (headless, no GL):
+  // paint stroke = one step, brush size, erase, bucket fill, rect fill,
+  // cancelled stroke, resize keeps tiles, tile size, eyedropper, undo-all /
+  // redo-all, scene.json v2 roundtrip, v1 upgrade, sprite assign / flip /
+  // source rect roundtrip, missing + corrupt image fallback, import, tileset.
+  {
+    auto fail = [&](const std::string& what) {
+      std::cerr << "TileMap/sprite smoke failed: " << what << '\n';
+      engine.shutdown();
+      return 1;
+    };
+    if (!fs::is_directory(smoke_root / "smoke-test-2d" / "assets")) {
+      return fail("new project should get an assets/ folder");
+    }
+    flow.request_back_to_projects();
+    bool again = false;
+    for (std::size_t i = 0; i < flow.projects().size(); ++i) {
+      if (flow.projects()[i].path == opened_path) {
+        again = flow.select_project(i);
+        break;
+      }
+    }
+    editor::Editor2DScreen* scr = flow.editor_screen();
+    if (!again || !scr) return fail("reopen project");
+    if (!fs::is_directory(fs::path(opened_path) / "assets")) {
+      return fail("assets/ folder not created on open");
+    }
+    editor::Workspace2D& w = scr->workspace();
+    w.set_snap_enabled(false);
+    auto disk_matches = [&]() {
+      editor::Workspace2D d;
+      std::string err;
+      return editor::scene_io::load(d, scene_file.string(), &err) &&
+             d.entities() == w.entities();
+    };
+    const editor::Workspace2D::Snapshot initial = w.snapshot();
+
+    // Seeded defaults carry a real, pre-painted TileMap.
+    {
+      editor::Workspace2D seed;
+      std::uint64_t seeded = 0;
+      for (const editor::Entity2D& e : seed.entities()) {
+        if (e.name == "TileMap" && e.tilemap) seeded = e.id;
+      }
+      if (seeded == 0 || seed.tile_at(seeded, 0, 0) != 4 ||
+          seed.tile_at(seeded, 7, 1) != 1 || seed.find(seeded)->w != 256.0f) {
+        return fail("seeded TileMap should be an 8x2 painted grid");
+      }
+    }
+
+    const std::uint64_t tm = scr->create_tilemap();  // 16 x 8, 32 px
+    if (tm == 0 || w.undo_count() != 1 || scr->paint_target() != tm) {
+      return fail("create_tilemap");
+    }
+    const editor::Entity2D* tme = w.find(tm);
+    if (!tme->tilemap || tme->w != 512.0f || tme->h != 256.0f) {
+      return fail("tilemap extent");
+    }
+    scr->set_tool(editor::TileTool::Paint);
+    if (scr->tool() != editor::TileTool::Paint) return fail("set_tool");
+
+    // 1) One stroke over many cells (with a gap the line fills) = one step.
+    scr->set_brush_tile(5);
+    if (!scr->begin_paint_stroke(tm, false)) return fail("begin stroke");
+    scr->stroke_to_cell(0, 0);
+    scr->stroke_to_cell(5, 0);  // jump: Bresenham fills 1..4
+    scr->stroke_to_cell(5, 0);  // same cell again: no-op
+    scr->stroke_to_cell(5, 3);
+    scr->stroke_to_cell(40, 3);  // off the grid: clipped
+    if (!scr->end_paint_stroke()) return fail("end stroke pushed nothing");
+    if (w.undo_count() != 2 || w.undo_label() != "Paint 19 tiles") {
+      return fail("stroke should be ONE step \"Paint 19 tiles\" (got \"" +
+                  w.undo_label() + "\")");
+    }
+    for (int c = 0; c <= 5; ++c) {
+      if (w.tile_at(tm, c, 0) != 5) return fail("stroke row 0");
+    }
+    if (w.tile_at(tm, 5, 2) != 5 || w.tile_at(tm, 15, 3) != 5 ||
+        w.tile_at(tm, 6, 1) != 0) {
+      return fail("stroke cells");
+    }
+    if (!disk_matches()) return fail("stroke not autosaved");
+
+    // 2) Brush size 2.
+    scr->set_brush_size(2);
+    scr->begin_paint_stroke(tm, false);
+    scr->stroke_to_cell(10, 5);
+    scr->end_paint_stroke();
+    scr->set_brush_size(1);
+    if (w.tile_at(tm, 10, 5) != 5 || w.tile_at(tm, 11, 6) != 5 ||
+        w.tile_at(tm, 12, 5) != 0 || w.undo_label() != "Paint 4 tiles") {
+      return fail("brush size 2");
+    }
+
+    // Undo / redo the 2x2 dab.
+    if (!flow.editor_undo() || w.tile_at(tm, 10, 5) != 0 ||
+        w.tile_at(tm, 0, 0) != 5 || !disk_matches()) {
+      return fail("undo stroke");
+    }
+    if (!flow.editor_redo() || w.tile_at(tm, 11, 6) != 5 || !disk_matches()) {
+      return fail("redo stroke");
+    }
+
+    // 3) Erase stroke.
+    scr->begin_paint_stroke(tm, true);
+    scr->stroke_to_cell(2, 0);
+    scr->end_paint_stroke();
+    if (w.tile_at(tm, 2, 0) != 0 || w.undo_label() != "Erase 1 tile") {
+      return fail("erase");
+    }
+
+    // A stroke that paints nothing new pushes no step; Esc restores.
+    const std::size_t steps_before = w.undo_count();
+    scr->begin_paint_stroke(tm, false);
+    scr->stroke_to_cell(0, 0);  // already 5
+    scr->end_paint_stroke();
+    if (w.undo_count() != steps_before) return fail("no-op stroke added a step");
+    const editor::Workspace2D::Snapshot pre_cancel = w.snapshot();
+    scr->begin_paint_stroke(tm, false);
+    scr->stroke_to_cell(8, 7);
+    scr->stroke_to_cell(12, 7);
+    scr->cancel_paint_stroke();
+    if (w.undo_count() != steps_before || w.entities() != pre_cancel.entities) {
+      return fail("cancelled stroke should restore tiles and add no step");
+    }
+
+    // 4) Bucket fill of the empty region. The stroke's row-3 line walls off
+    // cols 6..15 x rows 0..2 (30 cells), which must stay empty.
+    const std::size_t empty_cells =
+        128 - w.find(tm)->tilemap->count_nonempty();
+    scr->set_brush_tile(3);
+    const std::size_t filled = scr->fill_at(tm, 8, 7);
+    if (filled != empty_cells - 30 ||
+        w.find(tm)->tilemap->count_nonempty() != 98 ||
+        w.tile_at(tm, 2, 0) != 3 || w.tile_at(tm, 0, 0) != 5 ||
+        w.tile_at(tm, 8, 1) != 0) {
+      return fail("flood fill (" + std::to_string(filled) + " vs " +
+                  std::to_string(empty_cells) + ")");
+    }
+    if (w.undo_label() != "Fill " + std::to_string(filled) + " tiles" ||
+        !disk_matches()) {
+      return fail("fill step / autosave");
+    }
+    if (scr->fill_at(tm, 8, 7) != 0) return fail("fill same tile should no-op");
+    if (!flow.editor_undo() || w.tile_at(tm, 8, 7) != 0) return fail("undo fill");
+    if (!flow.editor_redo() || w.tile_at(tm, 8, 7) != 3) return fail("redo fill");
+
+    // 5) Rect fill + rect erase.
+    scr->set_brush_tile(7);
+    if (scr->fill_rect_cells(tm, 3, 7, 0, 6, false) != 8 ||
+        w.tile_at(tm, 0, 6) != 7 || w.tile_at(tm, 3, 7) != 7) {
+      return fail("rect fill");
+    }
+    if (scr->fill_rect_cells(tm, 14, 7, 15, 7, true) != 2 ||
+        w.tile_at(tm, 15, 7) != 0 || w.tile_at(tm, 13, 7) != 3) {
+      return fail("rect erase");
+    }
+
+    // 6) Eyedropper.
+    if (!scr->eyedrop(tm, 0, 6) || scr->brush_tile() != 7) return fail("eyedrop");
+    if (scr->eyedrop(tm, 15, 0)) return fail("eyedrop on empty should fail");
+
+    // 7) Resize keeps the overlap; undo restores the cut tiles.
+    const editor::Workspace2D::Snapshot pre_resize = w.snapshot();
+    if (!scr->resize_tilemap(tm, 4, 3)) return fail("resize");
+    tme = w.find(tm);
+    if (tme->tilemap->cols != 4 || tme->tilemap->rows != 3 || tme->w != 128.0f ||
+        tme->h != 96.0f || w.tile_at(tm, 0, 0) != 5 || w.tile_at(tm, 2, 0) != 3 ||
+        w.undo_label() != "Resize TileMap" || !disk_matches()) {
+      return fail("resize keeps tiles");
+    }
+    if (!flow.editor_undo() || w.entities() != pre_resize.entities) {
+      return fail("undo resize");
+    }
+    flow.editor_redo();
+    if (!scr->resize_tilemap(tm, 6, 5) || w.tile_at(tm, 5, 4) != 0 ||
+        w.tile_at(tm, 3, 2) != 3 || w.tile_at(tm, 0, 0) != 5) {
+      return fail("grow keeps tiles, new cells empty");
+    }
+    if (scr->resize_tilemap(tm, 6, 5)) return fail("same-size resize is a step");
+    if (!scr->set_tile_size(tm, 16) || w.find(tm)->w != 96.0f ||
+        w.find(tm)->h != 80.0f) {
+      return fail("tile size");
+    }
+
+    // 8) scene.json v2 roundtrip of the tile data (RLE).
+    {
+      editor::Workspace2D d;
+      std::string err;
+      if (!editor::scene_io::load(d, scene_file.string(), &err)) {
+        return fail("load v2: " + err);
+      }
+      const editor::Entity2D* de = d.find(tm);
+      if (!de || !de->tilemap || *de->tilemap != *w.find(tm)->tilemap ||
+          de->w != 96.0f) {
+        return fail("tilemap save/load roundtrip");
+      }
+      std::ifstream in(scene_file);
+      std::stringstream ss;
+      ss << in.rdbuf();
+      if (ss.str().find("\"version\": 2") == std::string::npos ||
+          ss.str().find("\"encoding\": \"rle\"") == std::string::npos) {
+        return fail("scene.json should be version 2 with RLE tiles");
+      }
+    }
+    {
+      std::vector<int> tiles = {0, 0, 0, 4, 4, 1, 0, 65535, 65535, 2};
+      const std::string rle = editor::tile_codec::encode_rle(tiles);
+      std::vector<int> back;
+      if (rle != "3*0,2*4,1,0,2*65535,2" ||
+          !editor::tile_codec::decode_rle(rle, tiles.size(), &back) ||
+          back != tiles) {
+        return fail("rle codec (" + rle + ")");
+      }
+      if (editor::tile_codec::decode_rle("3*x", 3, &back) ||
+          back != std::vector<int>({0, 0, 0})) {
+        return fail("rle should reject junk");
+      }
+    }
+
+    // 9) Undo everything back to the open state, then redo it all.
+    const editor::Workspace2D::Snapshot painted = w.snapshot();
+    const std::size_t depth = w.undo_count();
+    while (flow.editor_undo()) {
+    }
+    if (w.entities() != initial.entities || !disk_matches()) {
+      return fail("undo-all should restore the opened scene");
+    }
+    while (flow.editor_redo()) {
+    }
+    if (w.undo_count() != depth || w.entities() != painted.entities ||
+        !disk_matches()) {
+      return fail("redo-all should restore the painted scene");
+    }
+
+    // 10) Older files: v1 TileMap rect upgrades to an empty grid; files with
+    // no "version" key behave the same.
+    {
+      const fs::path v1_dir = smoke_root / "_scene_v1";
+      fs::create_directories(v1_dir);
+      const std::string v1_path = (v1_dir / "scene.json").string();
+      {
+        std::ofstream v1(v1_path, std::ios::trunc);
+        v1 << "{\n  \"version\": 1,\n  \"pan_x\": 0,\n  \"pan_y\": 0,\n"
+              "  \"zoom\": 1,\n  \"show_grid\": true,\n  \"selected_id\": 2,\n"
+              "  \"entities\": [\n"
+              "    {\"id\": 1, \"name\": \"Player\", \"x\": 1, \"y\": 2, "
+              "\"w\": 32, \"h\": 48, \"r\": 1, \"g\": 0, \"b\": 0, \"a\": 1, "
+              "\"layer\": 5},\n"
+              "    {\"id\": 2, \"name\": \"TileMap\", \"x\": 0, \"y\": 160, "
+              "\"w\": 256, \"h\": 64, \"r\": 0.5, \"g\": 0.5, \"b\": 0.5, "
+              "\"a\": 1, \"layer\": 0}\n  ]\n}\n";
+      }
+      editor::Workspace2D v1w;
+      std::string err;
+      if (!editor::scene_io::load(v1w, v1_path, &err)) {
+        return fail("v1 scene.json should still load: " + err);
+      }
+      const editor::Entity2D* up = v1w.find(2);
+      const editor::Entity2D* pl = v1w.find(1);
+      if (!up || !up->tilemap || up->tilemap->cols != 8 ||
+          up->tilemap->rows != 2 || up->tilemap->count_nonempty() != 0 ||
+          !pl || pl->tilemap || pl->sprite || pl->x != 1.0f) {
+        return fail("v1 upgrade");
+      }
+    }
+
+    // 11) Sprites + assets.
+    const fs::path assets_dir = fs::path(opened_path) / "assets";
+    if (!write_test_tga(assets_dir / "smoke_rider.tga", 16, 24,
+                        [](int x, int y) -> std::uint32_t {
+                          return ((x + y) & 1) ? 0xC9B48CFFu : 0xB86238FFu;
+                        }) ||
+        !write_test_tga(assets_dir / "smoke_tiles.tga", 64, 32,
+                        [](int x, int) -> std::uint32_t {
+                          return x < 32 ? 0x6B8C45FFu : 0x735033FFu;
+                        })) {
+      return fail("write test images");
+    }
+    {
+      std::ofstream junk(assets_dir / "broken.png", std::ios::binary);
+      junk << "not really a png";
+    }
+    scr->refresh_assets();
+    const auto& list = scr->asset_list();
+    auto listed = [&](const std::string& rel) {
+      return std::find(list.begin(), list.end(), rel) != list.end();
+    };
+    if (!listed("assets/smoke_rider.tga") || !listed("assets/smoke_tiles.tga") ||
+        !listed("assets/broken.png")) {
+      return fail("asset listing");
+    }
+    const editor::TextureInfo& rider = scr->texture("assets/smoke_rider.tga");
+    if (!rider.ok || rider.width != 16 || rider.height != 24 ||
+        rider.handle != 0) {
+      return fail("headless decode of the rider image");
+    }
+    if (scr->texture("assets/broken.png").ok) return fail("corrupt image decoded");
+
+    const std::size_t pre_sprite_steps = w.undo_count();
+    const std::uint64_t spr =
+        scr->create_sprite_at("assets/smoke_rider.tga", 100.0f, 100.0f);
+    const editor::Entity2D* se = w.find(spr);
+    if (spr == 0 || !se || !se->sprite || se->w != 16.0f || se->h != 24.0f ||
+        se->x != 92.0f || se->y != 88.0f || se->name != "smoke_rider" ||
+        se->color[0] != 1.0f ||
+        scr->sprite_state(*se) != editor::SpriteState::Ready ||
+        w.undo_count() != pre_sprite_steps + 1 ||
+        w.undo_label() != "Create Sprite") {
+      return fail("create sprite at drop point");
+    }
+    // Assign to a plain entity, then flip + source rect as one step.
+    const std::uint64_t crate = scr->create_entity("SpriteCrate");
+    if (!scr->assign_sprite(crate, "assets/smoke_rider.tga") ||
+        w.undo_label() != "Assign Sprite") {
+      return fail("assign sprite");
+    }
+    {
+      editor::Workspace2D::Snapshot before = w.snapshot();
+      editor::Entity2D* ce = w.find(crate);
+      ce->sprite->flip_x = true;
+      ce->sprite->use_src_rect = true;
+      ce->sprite->src_x = 2;
+      ce->sprite->src_y = 4;
+      ce->sprite->src_w = 8;
+      ce->sprite->src_h = 12;
+      if (!w.commit_step("Flip Sprite", std::move(before))) {
+        return fail("sprite field edit should be a step");
+      }
+      flow.editor_save_scene();
+    }
+    // Missing file: keeps the path, reports Missing, never crashes.
+    if (!scr->assign_sprite(spr, "assets/nope_not_here.png")) {
+      return fail("assign missing sprite");
+    }
+    if (scr->sprite_state(*w.find(spr)) != editor::SpriteState::Missing ||
+        scr->texture("assets/nope_not_here.png").error != "missing file") {
+      return fail("missing sprite fallback");
+    }
+    const std::uint64_t bad = scr->create_sprite_at("assets/broken.png", 0, 0);
+    if (bad == 0 || w.find(bad)->w != 64.0f ||
+        scr->sprite_state(*w.find(bad)) != editor::SpriteState::Missing) {
+      return fail("corrupt sprite falls back to a 64px rect");
+    }
+    {
+      editor::Workspace2D d;
+      std::string err;
+      if (!editor::scene_io::load(d, scene_file.string(), &err)) {
+        return fail("load sprites: " + err);
+      }
+      const editor::Entity2D* dc = d.find(crate);
+      const editor::Entity2D* ds = d.find(spr);
+      if (!dc || !dc->sprite || *dc->sprite != *w.find(crate)->sprite ||
+          !dc->sprite->flip_x || dc->sprite->src_h != 12 || !ds ||
+          !ds->sprite || ds->sprite->path != "assets/nope_not_here.png" ||
+          d.entities() != w.entities()) {
+        return fail("sprite save/load roundtrip");
+      }
+    }
+    // Undo the missing assignment -> back to the rider; undo the assign.
+    flow.editor_undo();  // corrupt sprite entity
+    flow.editor_undo();  // missing-path assignment
+    if (w.find(spr)->sprite->path != "assets/smoke_rider.tga") {
+      return fail("undo sprite reassignment");
+    }
+    flow.editor_undo();  // flip / src
+    flow.editor_undo();  // assign
+    if (w.find(crate)->sprite) return fail("undo assign should drop the sprite");
+    flow.editor_redo();
+    if (!w.find(crate)->sprite) return fail("redo assign");
+    if (!scr->assign_sprite(crate, "") || w.find(crate)->sprite) {
+      return fail("remove sprite");
+    }
+
+    // Tileset slicing: 64x32 image at 16 px = 4 x 2 tiles; 32 px = 2 x 1.
+    if (!scr->set_tileset(tm, "assets/smoke_tiles.tga") ||
+        !scr->tileset_ready(*w.find(tm)) || scr->palette_count(*w.find(tm)) != 8) {
+      return fail("tileset slicing at 16 px");
+    }
+    scr->set_tile_size(tm, 32);
+    if (scr->palette_count(*w.find(tm)) != 2) return fail("tileset at 32 px");
+    scr->set_tileset(tm, "assets/missing_tiles.png");
+    if (scr->tileset_ready(*w.find(tm)) ||
+        scr->palette_count(*w.find(tm)) != editor::kBuiltinTileCount) {
+      return fail("missing tileset falls back to the built-in palette");
+    }
+
+    // Import copies into assets/ and never overwrites.
+    const fs::path outside = smoke_root / "outside_art.tga";
+    write_test_tga(outside, 4, 4, [](int, int) -> std::uint32_t {
+      return 0xDEA034FFu;
+    });
+    std::string rel1;
+    std::string rel2;
+    if (!scr->import_asset(outside.string(), &rel1) ||
+        !scr->import_asset(outside.string(), &rel2) ||
+        rel1 != "assets/outside_art.tga" || rel2 != "assets/outside_art_2.tga" ||
+        !fs::exists(assets_dir / "outside_art_2.tga")) {
+      return fail("import (" + rel1 + ", " + rel2 + ")");
+    }
+    if (scr->import_asset((smoke_root / "nope.png").string())) {
+      return fail("import of a missing file should fail");
+    }
+    if (!disk_matches()) return fail("scene.json out of sync after sprites");
+    std::cout << "[smoke] tilemap OK (stroke = 1 step, brush 2x2, erase, "
+                 "cancelled stroke, fill "
+              << filled << " tiles, rect, eyedrop, resize keeps tiles, tile "
+                           "size, undo-all/redo-all, v2 RLE roundtrip, v1 "
+                           "upgrade)\n";
+    std::cout << "[smoke] sprites OK (drop-create, assign/flip/src rect "
+                 "roundtrip, undo/redo, missing + corrupt fallback, tileset "
+                 "slicing, import)\n";
+  }
+
   // Editor tools, headless: snap drag, nudge, multi-select, marquee,
   // duplicate, delete, and scene.json persistence of grid/snap/selection.
   {
@@ -734,6 +1226,9 @@ int run_imgui_app() {
 
   ImGui_ImplGlfw_InitForOpenGL(window, true);
   ImGui_ImplOpenGL3_Init("#version 330");
+  // Sprites / tilesets upload through this while the GL context lives.
+  static GlTextureUploader gl_uploader;
+  editor::set_texture_uploader(&gl_uploader);
 
   Engine engine;
   if (!engine.init()) {
@@ -799,6 +1294,8 @@ int run_imgui_app() {
   }
 
   engine.shutdown();
+  // Live caches drop (not delete) their handles once the context is gone.
+  editor::set_texture_uploader(nullptr);
   ImGui_ImplOpenGL3_Shutdown();
   ImGui_ImplGlfw_Shutdown();
   ImGui::DestroyContext();
