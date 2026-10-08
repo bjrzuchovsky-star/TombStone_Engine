@@ -350,7 +350,9 @@ int check_v4_format() {
   doc.entities[1].collider = default_collider(doc.entities[1]);
   const std::string v4 = scene_json::write(doc);
   scene_json::SceneDoc back;
-  if (v4.find("\"version\": 4") == std::string::npos ||
+  const std::string cur_version =
+      "\"version\": " + std::to_string(scene_json::kSceneVersion);
+  if (v4.find(cur_version) == std::string::npos ||
       v4.find("\"collider\": {\"x\": 0, \"y\": 0, \"w\": 30, \"h\": 40, "
               "\"type\": \"solid\", \"body\": \"dynamic\"}") ==
           std::string::npos ||
@@ -362,7 +364,8 @@ int check_v4_format() {
           std::string::npos) {
     return fail("v4 write:\n" + v4);
   }
-  if (!scene_json::parse(v4, &back, &err) || back.version != 4 ||
+  if (!scene_json::parse(v4, &back, &err) ||
+      back.version != scene_json::kSceneVersion ||
       back.entities != doc.entities || back.tile_solidity != ts ||
       scene_json::write(back) != v4) {
     return fail("v4 roundtrip: " + err);
