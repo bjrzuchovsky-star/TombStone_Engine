@@ -72,6 +72,7 @@ void draw_missing_marker(ImDrawList* draw, const ImVec2& p0, const ImVec2& p1) {
 void Editor2DScreen::draw_viewport() {
   viewport_focused_ =
       ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+  handle_collision_hotkey();
 
   const bool tile_mode = tool_ != TileTool::Select;
   ImGui::PushStyleColor(ImGuiCol_Text, theme::TextMuted());
@@ -83,7 +84,7 @@ void Editor2DScreen::draw_viewport() {
   } else {
     ImGui::TextUnformatted(
         "LMB drag move | Ctrl+click multi | drag empty: box select | "
-        "MMB/RMB/Alt pan | wheel zoom | drop assets here");
+        "MMB/RMB/Alt pan | wheel zoom | drop assets here | K collision");
   }
   ImGui::PopStyleColor();
 
@@ -456,6 +457,10 @@ void Editor2DScreen::draw_viewport() {
                     IM_COL32(255, 248, 236, 225), e.name.c_str());
     }
   }
+
+  // --- Collision overlay (K) ---------------------------------------------------
+  draw_collision_overlay(draw, canvas_pos, canvas_size, view.pan_x, view.pan_y,
+                         view.zoom);
 
   // --- Tile brush preview / hover cell ---------------------------------------
   hover_cell_valid_ = false;
