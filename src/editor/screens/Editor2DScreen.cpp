@@ -55,6 +55,13 @@ void Editor2DScreen::on_enter() {
   status_note_.clear();
   dirty_ = false;
   scene_path_ = scene_io::scene_path_for_project(project_.path);
+  // Scripts and the Telegraph start fresh for each project.
+  script_lib_.clear();
+  script_infos_.clear();
+  scripts_selected_.clear();
+  scripts_refresh_time_ = -1000.0;
+  telegraph_.clear();
+  telegraph_seen_total_ = 0;
 
   std::string err;
   if (!project_.path.empty() && scene_io::load(workspace_, scene_path_, &err)) {
@@ -103,6 +110,10 @@ void Editor2DScreen::on_enter() {
     }
   }
   refresh_assets();
+  refresh_scripts();
+  telegraph_.add(runtime::LogLevel::Info, "editor",
+                 "Telegraph open for " + project_.name + " (" +
+                     std::to_string(scripts_.size()) + " scripts on file)");
   std::cout << "[Editor2D] workspace for \"" << project_.name << "\" ("
             << to_string(project_.kind) << ") path=" << project_.path << '\n';
 }
@@ -140,6 +151,7 @@ void Editor2DScreen::mark_dirty_and_autosave() {
   std::string err;
   if (!save_scene(&err) && !err.empty()) {
     std::cout << "[Editor2D] autosave failed: " << err << '\n';
+    telegraph_.add(runtime::LogLevel::Warn, "editor", "Autosave failed: " + err);
   }
 }
 
@@ -175,6 +187,8 @@ bool Editor2DScreen::save_scene(std::string* error_out) {
 
 void Editor2DScreen::note(std::string message) {
   std::cout << "[Editor2D] " << message << '\n';
+  // Every status note also goes down the wire to the Telegraph.
+  telegraph_.add(runtime::LogLevel::Info, "editor", message);
   status_note_ = std::move(message);
   status_note_time_ =
       ImGui::GetCurrentContext() != nullptr ? ImGui::GetTime() : 0.0;
