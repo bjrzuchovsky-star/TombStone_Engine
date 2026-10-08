@@ -3,6 +3,7 @@
 #include "editor/assets/AssetLibrary.h"
 #include "editor/workspace/SceneIO.h"
 #include "scene/SampleRider.h"
+#include "scene/SampleScripts.h"
 
 #include <imgui.h>
 
@@ -71,6 +72,11 @@ void Editor2DScreen::on_enter() {
       std::string rider_err;
       if (!sample_rider::write_into_project(project_.path, &rider_err)) {
         std::cout << "[Editor2D] sample rider: " << rider_err << '\n';
+      }
+      // ...and the gate / gold nugget run the sample scripts.
+      std::string scripts_err;
+      if (!sample_scripts::write_into_project(project_.path, &scripts_err)) {
+        std::cout << "[Editor2D] sample scripts: " << scripts_err << '\n';
       }
       std::string save_err;
       if (scene_io::save(workspace_, scene_path_, &save_err)) {
@@ -281,6 +287,7 @@ void Editor2DScreen::reset_scene_placeholders() {
   Workspace2D::Snapshot before = prepare_edit();
   workspace_.reset_defaults();
   sample_rider::write_into_project(project_.path);
+  sample_scripts::write_into_project(project_.path);
   workspace_.commit_step("Reset Scene", std::move(before));
   has_range_anchor_ = false;
   mark_dirty_and_autosave();

@@ -1,6 +1,7 @@
 #include "editor/workspace/Workspace2D.h"
 
 #include "scene/SampleRider.h"
+#include "scene/SampleScripts.h"
 
 #include <algorithm>
 #include <cmath>
@@ -98,6 +99,44 @@ void Workspace2D::reset_defaults() {
   }
   sync_tilemap_extent(tilemap);
   entities_.push_back(tilemap);
+
+  // Scripted samples (scripts/gate.lua, scripts/gold.lua; written next to
+  // the rider sheet): ride left onto the nugget, then press E / Space /
+  // pad A at the gate. Both sit left of the rider, off the usual trail.
+  Entity2D gate;
+  gate.id = alloc_id();
+  gate.name = sample_scripts::kGateName;
+  gate.x = 0.0f;
+  gate.y = 48.0f;
+  gate.w = 16.0f;
+  gate.h = 80.0f;
+  gate.color[0] = 0.55f;  // weathered pine
+  gate.color[1] = 0.36f;
+  gate.color[2] = 0.20f;
+  gate.color[3] = 1.0f;
+  gate.layer = 4;
+  gate.collider = default_collider(gate);  // solid until it swings open
+  gate.script = ScriptData{};
+  gate.script->path = sample_scripts::kGate;
+  entities_.push_back(gate);
+
+  Entity2D gold;
+  gold.id = alloc_id();
+  gold.name = sample_scripts::kGoldName;
+  gold.x = 28.0f;
+  gold.y = 80.0f;
+  gold.w = 16.0f;
+  gold.h = 16.0f;
+  gold.color[0] = 0.96f;
+  gold.color[1] = 0.78f;
+  gold.color[2] = 0.26f;
+  gold.color[3] = 1.0f;
+  gold.layer = 4;
+  gold.collider = default_collider(gold);
+  gold.collider->trigger = true;
+  gold.script = ScriptData{};
+  gold.script->path = sample_scripts::kGold;
+  entities_.push_back(gold);
 
   select(player.id);
 }

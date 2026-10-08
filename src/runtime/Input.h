@@ -16,7 +16,7 @@ namespace runtime {
 
 // Action buttons (bit flags). Names are roles, not keys.
 enum Button : std::uint32_t {
-  kButtonAction = 1u << 0,  // Space / gamepad A
+  kButtonAction = 1u << 0,  // E / Space / gamepad A
   kButtonAlt = 1u << 1,     // Shift / gamepad B
   kButtonStart = 1u << 2,   // Enter / gamepad Start
 };
