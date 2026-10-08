@@ -30,6 +30,8 @@ const char* to_string(TileTool tool);
 void draw_tile_quad(ImDrawList* draw, const TextureInfo* tileset,
                     int tile_size, int palette_count, int tile_id,
                     const ImVec2& p0, const ImVec2& p1, float alpha = 1.0f);
+// Red corner wedge on a palette swatch whose tile blocks riders.
+void draw_solid_marker(ImDrawList* draw, const ImVec2& p0, const ImVec2& p1);
 
 // How a sprite entity will draw this frame.
 enum class SpriteState { None, Ready, Missing };
@@ -160,6 +162,27 @@ class Editor2DScreen final : public IScreen {
   // False (with a status note) when ts_game is not built or will not start.
   bool launch_game();
 
+  // --- Collision (Editor2DScreen_Collision.cpp) -------------------------------
+  // Tile solidity per tileset ("" = built-in palette). Each toggle is one
+  // undo step ("Solid: Stone") and autosaves scene.json "tile_solidity".
+  // Locked while playing, like every other edit.
+  bool tile_solid(const std::string& tileset, int tile_id) const;
+  bool set_tile_solid(const std::string& tileset, int tile_id, bool solid);
+  bool toggle_tile_solid(const std::string& tileset, int tile_id);
+  // Add / edit / remove (nullopt) an entity's collider: one undo step.
+  bool set_collider(std::uint64_t id, std::optional<ColliderData> collider,
+                    const std::string& label = "Edit Collider");
+  // K: outline solid tiles and colliders in the viewport, edit and play.
+  bool show_collision() const { return show_collision_; }
+  void set_show_collision(bool on);
+  void toggle_collision_overlay();
+  // What the overlay draws inside a world rect: the edit scene, or the
+  // running world while playing (triggers with a rider inside are active).
+  void build_collision_overlay(const runtime::WorldRect& view,
+                               std::vector<runtime::OverlayBox>* out) const;
+  // "Player rode into Gate (tick 26)" while playing; "" otherwise.
+  std::string last_trigger_text() const;
+
  private:
   void draw_ui();
   void draw_menu_bar();
@@ -175,6 +198,16 @@ class Editor2DScreen final : public IScreen {
   void draw_play_viewport();   // Viewport2D while playing
   void draw_play_status();     // status-bar section while playing
   void draw_play_menu();
+  // Collision section of the Inspector (Editor2DScreen_Collision.cpp).
+  void draw_inspector_collider(std::uint64_t id);
+  // Tile Palette "Solid" checkbox for the brush tile.
+  void draw_tile_solid_controls(const Entity2D* target);
+  // K toggles the overlay (both viewports call this).
+  void handle_collision_hotkey();
+  // Overlay on a canvas whose centre shows world (center_x, center_y).
+  void draw_collision_overlay(ImDrawList* draw, const ImVec2& canvas_pos,
+                              const ImVec2& canvas_size, float center_x,
+                              float center_y, float zoom);
   // Keyboard (WASD / arrows, Space, Shift, Enter) + gamepads via GLFW.
   runtime::InputFrame poll_play_input() const;
   void draw_tile_palette();
@@ -300,6 +333,10 @@ class Editor2DScreen final : public IScreen {
   float play_cam_y_ = 0.0f;
   float play_cam_zoom_ = 1.0f;
   std::vector<runtime::DrawQuad> play_quads_;
+
+  // Collision overlay (K).
+  bool show_collision_ = false;
+  std::vector<runtime::OverlayBox> overlay_boxes_;
 
   // Status-bar note (e.g. "Duplicated 3").
   std::string status_note_;

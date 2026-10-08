@@ -86,7 +86,8 @@ bool Editor2DScreen::start_play() {
     mark_dirty_and_autosave();
   }
   std::string err;
-  if (!play_.start(workspace_.entities(), project_.path, &err)) {
+  if (!play_.start(workspace_.entities(), workspace_.tile_solidity(),
+                   project_.path, &err)) {
     note(err.empty() ? std::string("Could not start the ride.") : err);
     return false;
   }
@@ -308,6 +309,10 @@ void Editor2DScreen::draw_play_menu() {
   if (ImGui::MenuItem("Free Camera", "C", &free_cam, is_playing())) {
     set_play_free_camera(free_cam);
   }
+  bool overlay = show_collision_;
+  if (ImGui::MenuItem("Collision Overlay", "K", &overlay)) {
+    set_show_collision(overlay);
+  }
   ImGui::Separator();
   if (ImGui::MenuItem("Launch Game (ts_game)", nullptr, false, !is_playing())) {
     launch_game();
@@ -344,6 +349,12 @@ void Editor2DScreen::draw_play_status() {
   }
   sep();
   ImGui::TextDisabled(play_free_cam_ ? "free camera" : "follow camera");
+  // Last trigger event (no behaviour yet: scripts will hook these).
+  const std::string trig = last_trigger_text();
+  if (!trig.empty()) {
+    sep();
+    ImGui::TextColored(theme::Warning(), "%s", trig.c_str());
+  }
 }
 
 // --- Viewport while playing -----------------------------------------------------
@@ -351,6 +362,7 @@ void Editor2DScreen::draw_play_status() {
 void Editor2DScreen::draw_play_viewport() {
   viewport_focused_ =
       ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+  handle_collision_hotkey();
   ImGui::PushStyleColor(ImGuiCol_Text, theme::TextMuted());
   if (is_paused()) {
     ImGui::TextUnformatted(
@@ -358,7 +370,7 @@ void Editor2DScreen::draw_play_viewport() {
   } else {
     ImGui::TextUnformatted(
         "RIDING | WASD / arrows move P1 | gamepads P1-P4 | F6 pause | C free "
-        "camera | F5 / Stop ends the ride");
+        "camera | K collision | F5 / Stop ends the ride");
   }
   ImGui::PopStyleColor();
 
@@ -439,6 +451,11 @@ void Editor2DScreen::draw_play_viewport() {
       }
     }
   }
+  draw->PopClipRect();
+  // Collision overlay (K): live walls, bodies and lit-up triggers.
+  draw_collision_overlay(draw, canvas_pos, canvas_size, cam.x, cam.y,
+                         cam.zoom);
+  draw->PushClipRect(canvas_pos, canvas_end, true);
   // Rider tags.
   for (const runtime::Actor& a : world.actors()) {
     if (!a.data.player) {
@@ -678,6 +695,8 @@ void Editor2DScreen::draw_inspector_gameplay(std::uint64_t id) {
       }
     }
   }
+  // Collider: AABB, solid / trigger, static / dynamic.
+  draw_inspector_collider(id);
 }
 
 }  // namespace editor
