@@ -1,5 +1,11 @@
+# Scene data shared by the editor, the runtime and ts_game: entities and
+# their components, tile codec, scene.json reader/writer. Pure C++ (no UI,
+# no graphics API), so headless tools and servers can link it too.
 add_library(ts_scene
   Scene.cpp
+  SceneData.cpp
+  SceneJson.cpp
+  TileMap.cpp
 )
 
 target_include_directories(ts_scene
