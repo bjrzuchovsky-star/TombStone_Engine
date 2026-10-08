@@ -37,7 +37,7 @@ int check_v6_format() {
   sc.set("reach", ScriptValue::of_number(0.1));
   sc.set("line", ScriptValue::of_text("Gate's \"open\"\n"));
   sc.set("locked", ScriptValue::of_bool(false));
-  sc.set("big", ScriptValue::of_number(123456789.125));
+  sc.set("big", ScriptValue::of_number([REDACTED]9.125));
   if (sc.props.size() != 4 || sc.props[0].name != "big" ||
       sc.props[3].name != "reach") {
     return fail("props should stay sorted by name");
@@ -47,7 +47,7 @@ int check_v6_format() {
   scene_json::SceneDoc back;
   if (v6.find("\"version\": 6") == std::string::npos ||
       v6.find("\"script\": {\"path\": \"scripts/gate.lua\", \"props\": "
-              "[{\"name\": \"big\", \"number\": 123456789.125}, {\"name\": "
+              "[{\"name\": \"big\", \"number\": [REDACTED]9.125}, {\"name\": "
               "\"line\", \"text\": \"Gate's \\\"open\\\"\\n\"}, {\"name\": "
               "\"locked\", \"bool\": false}, {\"name\": \"reach\", "
               "\"number\": 0.1}]}") == std::string::npos ||
@@ -88,5 +88,5 @@ int run_scripting_smoke() {
   }
   std::cout << "[smoke] scripting data OK (scene.json v6 script + typed props "
                "roundtrip, v5 -> v6 load, malformed refused)\n";
-  return 0;
+  return run_script_runtime_smoke();
 }
