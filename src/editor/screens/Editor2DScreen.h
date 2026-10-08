@@ -4,6 +4,7 @@
 #include "editor/screens/IScreen.h"
 #include "editor/workspace/Workspace2D.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 
@@ -35,6 +36,12 @@ class Editor2DScreen final : public IScreen {
   bool is_dirty() const { return dirty_; }
   const std::string& scene_path() const { return scene_path_; }
 
+  // Editing tools shared by hotkeys, menus, toolbar and hierarchy buttons.
+  // Each autosaves scene.json like the other workspace edits.
+  std::size_t duplicate_selected();  // Ctrl+D
+  std::size_t delete_selected();     // Delete
+  bool nudge_selected(int dir_x, int dir_y, bool large);  // arrows (+Shift)
+
  private:
   void draw_ui();
   void draw_menu_bar();
@@ -43,6 +50,14 @@ class Editor2DScreen final : public IScreen {
   void draw_hierarchy();
   void draw_viewport();
   void draw_inspector();
+  void handle_hotkeys();
+  void draw_help_menu_contents();
+  // Inspector float field that live-snaps to the grid when snap is on.
+  // slot identifies the field so the raw (unsnapped) drag value survives
+  // between frames. Returns true when the value changed this frame.
+  bool transform_field(const char* label, float* field, int slot, float vmin,
+                       float vmax, bool is_extent);
+  void note(std::string message);  // transient status-bar message
   void setup_default_dock_layout(unsigned int dockspace_id);
 
   void begin_rename(std::uint64_t id);
@@ -65,7 +80,6 @@ class Editor2DScreen final : public IScreen {
   bool show_inspector_ = true;
   bool show_status_bar_ = true;
   bool show_toolbar_ = true;
-  bool snap_enabled_ = false;  // placeholder UX only
   bool dock_layout_initialized_ = false;
 
   // Hierarchy rename state.
@@ -74,8 +88,28 @@ class Editor2DScreen final : public IScreen {
   char rename_buf_[128]{};
 
   // Viewport interaction.
+  enum class DragMode { None, Move, Marquee };
   bool panning_ = false;
-  bool pending_click_select_ = false;
+  DragMode drag_mode_ = DragMode::None;
+  std::uint64_t drag_hit_id_ = 0;  // entity under the cursor at press (0=none)
+  bool drag_additive_ = false;     // Ctrl/Shift held at press
+  bool drag_moved_ = false;        // passed the drag threshold
+  bool viewport_focused_ = false;
+  bool hierarchy_focused_ = false;
+  bool nudge_pending_save_ = false;  // autosave once arrows are released
+
+  // Hierarchy shift-click range anchor (index into entities()).
+  std::size_t range_anchor_ = 0;
+  bool has_range_anchor_ = false;
+
+  // Inspector live-snap drag state.
+  int insp_drag_slot_ = -1;
+  std::uint64_t insp_drag_entity_ = 0;
+  float insp_drag_raw_ = 0.0f;
+
+  // Status-bar note (e.g. "Duplicated 3").
+  std::string status_note_;
+  double status_note_time_ = -1000.0;
 };
 
 }  // namespace editor

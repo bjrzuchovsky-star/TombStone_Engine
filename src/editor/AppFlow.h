@@ -63,6 +63,10 @@ class AppFlow {
   Workspace2D* editor_workspace();
   const Workspace2D* editor_workspace() const;
   bool editor_save_scene(std::string* error_out = nullptr);
+  // Editor tools routed through Editor2DScreen (autosave included).
+  // Return the number of entities affected (0 when not in Editor2D).
+  std::size_t editor_duplicate_selected();
+  std::size_t editor_delete_selected();
 
   const std::vector<ProjectInfo>& projects() const {
     return project_store_.projects();

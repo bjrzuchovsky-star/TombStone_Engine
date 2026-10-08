@@ -106,18 +106,36 @@ apps/admin|client|game/ # Build targets controlled by TS_BUILD_*
 2. **Login** -- username/password, Login, Dev login, Settings  
 3. **ProjectManager** -- list projects, Open / double-click, New 2D (validated name), Settings, Logout; errors shown in-UI  
 4. **Settings** -- edit `projects_root` (Browse opens an in-app ImGui folder picker), theme, `auto_login_dev`, username; Apply/Save still validates, writes settings, and reloads projects  
-5. **Editor2D** -- live Hierarchy (create/rename/delete/select under Scene), Viewport2D canvas (rects, pan MMB/Alt-drag, wheel zoom, optional grid), Inspector (name, transform, color/tint, layer/z) + Back; File → Save Scene  
+5. **Editor2D** -- live Hierarchy (create/duplicate/rename/delete, multi-select), Viewport2D canvas (drag-to-move, box select, snap-to-grid, pan MMB/RMB/Alt-drag, wheel zoom), Inspector (name, snapped transform, color/tint, layer/z) + Back; File → Save Scene  
 
 Namespace: `ts::tombstone::editor`.
 
-**Editor2D workspace** loads/saves `<project>/scene.json` (entities: id/name, x/y/w/h, rgba tint, layer/z, plus pan/zoom/grid). Opening a 2D project loads scene.json when present, otherwise seeds Camera2D / Player / TileMap and writes an initial scene.json. Hierarchy/Inspector edits autosave; leaving the editor (Back / Quit) also saves. Hierarchy edits and Inspector fields update the viewport immediately. **Settings → Browse...** uses a portable ImGui directory browser (no extra native deps); Apply remains the step that validates/writes `projects_root` and reloads the project list.
+**Editor2D workspace** loads/saves `<project>/scene.json` (entities: id/name, x/y/w/h, rgba tint, layer/z, plus pan/zoom/grid, `grid_size`, `snap`, `selection`; older files without the new keys still load). Opening a 2D project loads scene.json when present, otherwise seeds Camera2D / Player / TileMap and writes an initial scene.json. Hierarchy/Inspector edits autosave; leaving the editor (Back / Quit) also saves. Hierarchy edits and Inspector fields update the viewport immediately. **Settings → Browse...** uses a portable ImGui directory browser (no extra native deps); Apply remains the step that validates/writes `projects_root` and reloads the project list.
 
 
-### UI polish (Admin shell)
+### UI identity (Admin shell)
 
-Admin uses a central `src/editor/ui/Theme` module (dark professional palette, rounded panels, accent buttons) applied at startup and when Settings → theme changes. Screens share card/panel chrome: Loading + Login branded splash, Project Manager card list with dimension badges / last-opened / delete confirm, Settings grouped sections, and Editor2D with File/Edit/View/Help menus, toolbar (grid/snap placeholder), status-bar HUD (FPS, zoom, selection, project path), and ImGui **Docking** layout for Hierarchy / Viewport2D / Inspector (View menu toggles). Dear ImGui docking + multi-viewport flags are enabled in `apps/admin/main.cpp`.
+Admin has its own look, kept in `src/editor/ui/Theme` (palette, metrics, custom-drawn chrome) and `src/editor/ui/Brand.h` (copy). The tone is frontier/western with a gothic edge, not cartoonish:
 
+- **Dusk** (default): deep charcoal base, warm stone/sand neutrals, bone text, **amber/gold** primary accent, **rust/copper** secondary. **Parchment** is the light variant (warm paper, ink-brown text, darker gold). Pick either in Settings → Lamplight.
+- Sharp 2-3 px corners with 1 px inked frame borders. Custom-drawn section headers (amber diamond, label, caption, fading copper rule), ornamental dividers, a headstone mark, title strips, and a branded progress bar. Hover and active states go copper and amber.
+- Copy keeps one short, dry voice: splash "TOMBSTONE / Four riders. One frontier. Build it right.", login "Sign the ledger. Ride in.", Project Manager "Claims" / "Break Ground" / "Bury Project?", and Settings sections "Territory / Rider / Lamplight / Trail". The editor status bar carries the brand, and the window title follows the open project.
 
+Editor2D runs in an ImGui **Docking** layout (Hierarchy / Viewport2D / Inspector) with a tool strip (Grid, Snap, cell size, Duplicate, Delete, Reset Cam, Save) and a status bar (fps, zoom, grid/snap, selection, recent action, path). Docking and multi-viewport flags are enabled in `apps/admin/main.cpp`.
+
+### Editor2D tools
+
+| Action | Input |
+|---|---|
+| Move selection | LMB drag in Viewport (Esc cancels mid-drag) |
+| Multi-select | Ctrl+click (toggle) / Shift+click (add; Hierarchy: range) |
+| Box select | LMB drag on empty canvas (Ctrl/Shift adds) |
+| Duplicate / Delete | Ctrl+D / Del (also toolbar, Hierarchy, Edit menu) |
+| Nudge | Arrows (1 px, or 1 cell with snap); Shift+Arrows (10 px, or 4 cells) |
+| Snap / grid | Shift+G snap, G grid, `[` `]` halve/double cell size, or toolbar cell field |
+| Select all / clear / rename | Ctrl+A / Esc / F2 |
+
+When snap is on, drag moves, nudges, duplicates, and Inspector X/Y/W/H edits all land on the grid. In a group drag the primary snaps and the others keep their spacing. The Inspector edits the primary selection (amber outline) and shows the selection count. Every tool autosaves `scene.json`. `--smoke` covers snap, nudge, multi-select, box select, duplicate, and delete, plus autosave and persistence.
 
 ### Building admin with ImGui
 

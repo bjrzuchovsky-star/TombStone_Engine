@@ -24,7 +24,16 @@ void Editor2DScreen::on_enter() {
   back_requested_ = false;
   renaming_ = false;
   panning_ = false;
-  pending_click_select_ = false;
+  drag_mode_ = DragMode::None;
+  drag_hit_id_ = 0;
+  drag_additive_ = false;
+  drag_moved_ = false;
+  viewport_focused_ = false;
+  hierarchy_focused_ = false;
+  nudge_pending_save_ = false;
+  has_range_anchor_ = false;
+  insp_drag_slot_ = -1;
+  status_note_.clear();
   dirty_ = false;
   scene_path_ = scene_io::scene_path_for_project(project_.path);
 
@@ -97,6 +106,50 @@ bool Editor2DScreen::save_scene(std::string* error_out) {
   dirty_ = false;
   std::cout << "[Editor2D] saved scene.json (" << workspace_.entities().size()
             << " entities) -> " << scene_path_ << '\n';
+  return true;
+}
+
+void Editor2DScreen::note(std::string message) {
+  std::cout << "[Editor2D] " << message << '\n';
+  status_note_ = std::move(message);
+  status_note_time_ =
+      ImGui::GetCurrentContext() != nullptr ? ImGui::GetTime() : 0.0;
+}
+
+std::size_t Editor2DScreen::duplicate_selected() {
+  cancel_rename();
+  const std::vector<std::uint64_t> ids = workspace_.duplicate_selection();
+  if (ids.empty()) {
+    return 0;
+  }
+  mark_dirty_and_autosave();
+  note("Duplicated " + std::to_string(ids.size()) +
+       (ids.size() == 1 ? " entity" : " entities"));
+  return ids.size();
+}
+
+std::size_t Editor2DScreen::delete_selected() {
+  cancel_rename();
+  if (workspace_.move_active()) {
+    workspace_.cancel_move();
+    drag_mode_ = DragMode::None;
+  }
+  const std::size_t n = workspace_.delete_selection();
+  if (n == 0) {
+    return 0;
+  }
+  has_range_anchor_ = false;
+  mark_dirty_and_autosave();
+  note("Buried " + std::to_string(n) + (n == 1 ? " entity" : " entities"));
+  return n;
+}
+
+bool Editor2DScreen::nudge_selected(int dir_x, int dir_y, bool large) {
+  if (!workspace_.nudge_selection(dir_x, dir_y, large)) {
+    return false;
+  }
+  mark_dirty();
+  nudge_pending_save_ = true;  // flushed when the arrow keys are released
   return true;
 }
 

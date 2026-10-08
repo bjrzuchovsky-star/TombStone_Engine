@@ -3,6 +3,7 @@
 #include "editor/AppState.h"
 #include "editor/settings/Settings.h"
 #include "editor/workspace/SceneIO.h"
+#include "editor/ui/Brand.h"
 #include "editor/ui/Theme.h"
 #include "editor/workspace/Workspace2D.h"
 
@@ -17,7 +18,9 @@
 #include <cstring>
 #include <filesystem>
 #include <iostream>
+#include <optional>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -266,6 +269,173 @@ int run_console_smoke() {
     return 1;
   }
 
+  // Editor tools through the screen: Ctrl+D / Del paths must autosave.
+  {
+    ws2->select(std::nullopt);
+    for (const editor::Entity2D& e : ws2->entities()) {
+      if (e.name == "SmokePersist") {
+        ws2->select(e.id);
+        break;
+      }
+    }
+    if (flow.editor_duplicate_selected() != 1) {
+      std::cerr << "editor_duplicate_selected expected 1 copy\n";
+      engine.shutdown();
+      return 1;
+    }
+    editor::Workspace2D on_disk;
+    std::string err;
+    if (!editor::scene_io::load(on_disk, scene_file.string(), &err) ||
+        on_disk.entities().size() != before_count + 2) {
+      std::cerr << "Duplicate was not autosaved to scene.json: " << err << '\n';
+      engine.shutdown();
+      return 1;
+    }
+    bool copy_found = false;
+    for (const editor::Entity2D& e : on_disk.entities()) {
+      if (e.name == "SmokePersist 2" && e.layer == 7) {
+        copy_found = true;
+      }
+    }
+    if (!copy_found) {
+      std::cerr << "Expected \"SmokePersist 2\" copy in scene.json\n";
+      engine.shutdown();
+      return 1;
+    }
+    if (flow.editor_delete_selected() != 1) {
+      std::cerr << "editor_delete_selected expected 1 removal\n";
+      engine.shutdown();
+      return 1;
+    }
+    editor::Workspace2D after_delete;
+    if (!editor::scene_io::load(after_delete, scene_file.string(), &err) ||
+        after_delete.entities().size() != before_count + 1) {
+      std::cerr << "Delete was not autosaved to scene.json\n";
+      engine.shutdown();
+      return 1;
+    }
+    std::cout << "[smoke] duplicate/delete autosave OK\n";
+  }
+
+  // Editor tools, headless: snap drag, nudge, multi-select, marquee,
+  // duplicate, delete, and scene.json persistence of grid/snap/selection.
+  {
+    auto fail = [&](const char* what) {
+      std::cerr << "Editor tools smoke failed: " << what << '\n';
+      engine.shutdown();
+      return 1;
+    };
+    editor::Workspace2D t;
+    t.reset_defaults();  // Camera2D (0,0) / Player (64,64) / TileMap (0,160)
+    std::uint64_t cam = 0;
+    std::uint64_t player = 0;
+    for (const editor::Entity2D& e : t.entities()) {
+      if (e.name == "Camera2D") cam = e.id;
+      if (e.name == "Player") player = e.id;
+    }
+    if (cam == 0 || player == 0) return fail("seed entities");
+
+    t.set_grid_size(16.0f);
+    t.set_snap_enabled(true);
+    if (t.snap_value(37.0f) != 32.0f || t.snap_extent(5.0f) != 16.0f) {
+      return fail("snap_value / snap_extent");
+    }
+
+    // Drag-move with snap: +13,-5 from (64,64) lands on (80,64).
+    t.select(player);
+    t.begin_move();
+    t.update_move(13.0f, -5.0f);
+    if (!t.end_move()) return fail("drag move reported no change");
+    const editor::Entity2D* p = t.find(player);
+    if (p->x != 80.0f || p->y != 64.0f) return fail("snapped drag position");
+
+    // Nudge: 1 cell right, 4 cells down (Shift).
+    t.nudge_selection(1, 0, false);
+    t.nudge_selection(0, 1, true);
+    p = t.find(player);
+    if (p->x != 96.0f || p->y != 128.0f) return fail("snapped nudge");
+    // Off-grid entity lands on the next grid line first.
+    t.find(player)->x = 100.0f;
+    t.nudge_selection(1, 0, false);
+    if (t.find(player)->x != 112.0f) return fail("off-grid nudge");
+    // Snap off: 1 px / 10 px steps.
+    t.set_snap_enabled(false);
+    t.nudge_selection(-1, 0, false);
+    t.nudge_selection(-1, 0, true);
+    if (t.find(player)->x != 101.0f) return fail("free nudge");
+    t.set_snap_enabled(true);
+    t.find(player)->x = 96.0f;
+
+    // Multi-select (Ctrl+click semantics) + group drag keeps formation.
+    t.toggle_selection(cam);
+    if (t.selection_count() != 2 || t.selected_id() != cam) {
+      return fail("toggle_selection");
+    }
+    t.begin_move();
+    t.update_move(32.0f, 0.0f);
+    t.end_move();
+    if (t.find(cam)->x != 32.0f || t.find(player)->x != 128.0f) {
+      return fail("group move");
+    }
+    t.toggle_selection(cam);
+    if (t.selection_count() != 1 || t.selected_id() != player) {
+      return fail("toggle off");
+    }
+    t.toggle_selection(cam);
+
+    // Duplicate both; copies are offset one cell and become the selection.
+    const std::size_t n0 = t.entities().size();
+    const std::vector<std::uint64_t> copies = t.duplicate_selection();
+    if (copies.size() != 2 || t.entities().size() != n0 + 2 ||
+        t.selection() != copies) {
+      return fail("duplicate_selection");
+    }
+    const editor::Entity2D* pc = t.find(t.selected_id().value_or(0));
+    if (!pc || pc->name != "Camera2D 2" || pc->x != 48.0f || pc->y != 16.0f) {
+      return fail("duplicate naming / offset");
+    }
+    t.select(copies.front());
+    t.duplicate_selection();
+    if (t.selected() == nullptr || t.selected()->name != "Player 3") {
+      return fail("duplicate of a copy should count up (Player 3)");
+    }
+
+    // Marquee: box around the camera only.
+    if (t.select_in_rect(30.0f, -4.0f, 40.0f, 8.0f, false) != 1 ||
+        t.selected_id() != cam || t.selection_count() != 1) {
+      return fail("select_in_rect");
+    }
+    t.select_in_rect(-1000.0f, -1000.0f, 1000.0f, 1000.0f, false);
+    if (t.selection_count() != t.entities().size()) {
+      return fail("select_in_rect all");
+    }
+
+    // Persist grid/snap/selection through scene.json.
+    t.set_selection(copies, copies.back());
+    const fs::path tools_dir = smoke_root / "_editor_tools";
+    fs::create_directories(tools_dir);
+    const std::string tools_path = (tools_dir / "scene.json").string();
+    std::string err;
+    if (!editor::scene_io::save(t, tools_path, &err)) return fail("save");
+    editor::Workspace2D back;
+    if (!editor::scene_io::load(back, tools_path, &err)) return fail("load");
+    if (back.grid_size() != 16.0f || !back.snap_enabled() ||
+        back.entities().size() != t.entities().size() ||
+        back.selection() != copies || back.selected_id() != copies.back()) {
+      return fail("grid/snap/selection roundtrip");
+    }
+
+    // Delete selection.
+    const std::size_t before_del = back.entities().size();
+    if (back.delete_selection() != 2 ||
+        back.entities().size() != before_del - 2 ||
+        back.selection_count() != 0) {
+      return fail("delete_selection");
+    }
+    std::cout << "[smoke] editor tools OK (snap drag, nudge, multi-select, "
+                 "marquee, duplicate, delete, grid/snap persistence)\n";
+  }
+
   // Direct SceneIO roundtrip without going through GUI again.
   {
     editor::Workspace2D direct;
@@ -338,7 +508,7 @@ int run_imgui_app() {
 #endif
 
   GLFWwindow* window =
-      glfwCreateWindow(1280, 720, "TombStone Engine - Admin", nullptr, nullptr);
+      glfwCreateWindow(1280, 720, editor::brand::kWindowTitle, nullptr, nullptr);
   if (!window) {
     std::cerr << "glfwCreateWindow failed\n";
     glfwTerminate();
@@ -374,6 +544,7 @@ int run_imgui_app() {
   flow.start();
   apply_theme(flow.settings());
   std::string last_theme = flow.settings().theme;
+  std::string last_title = editor::brand::kWindowTitle;
 
   while (!glfwWindowShouldClose(window) && flow.is_running()) {
     glfwPollEvents();
@@ -391,12 +562,24 @@ int run_imgui_app() {
       last_theme = flow.settings().theme;
     }
 
+    // Window title follows the open project ("TombStone Admin | My Claim").
+    std::string title = editor::brand::kWindowTitle;
+    if (flow.current_state() == AppState::Editor2D && flow.active_project()) {
+      title = std::string(editor::brand::kWindowTitlePrefix) +
+              flow.active_project()->name;
+    }
+    if (title != last_title) {
+      glfwSetWindowTitle(window, title.c_str());
+      last_title = title;
+    }
+
     ImGui::Render();
     int display_w = 0;
     int display_h = 0;
     glfwGetFramebufferSize(window, &display_w, &display_h);
     glViewport(0, 0, display_w, display_h);
-    glClearColor(0.07f, 0.08f, 0.10f, 1.0f);
+    const ImVec4 clear = editor::theme::Charcoal();
+    glClearColor(clear.x, clear.y, clear.z, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 

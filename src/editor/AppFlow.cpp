@@ -377,6 +377,20 @@ bool AppFlow::editor_save_scene(std::string* error_out) {
   return editor->save_scene(error_out);
 }
 
+std::size_t AppFlow::editor_duplicate_selected() {
+  if (auto* editor = dynamic_cast<Editor2DScreen*>(screen_.get())) {
+    return editor->duplicate_selected();
+  }
+  return 0;
+}
+
+std::size_t AppFlow::editor_delete_selected() {
+  if (auto* editor = dynamic_cast<Editor2DScreen*>(screen_.get())) {
+    return editor->delete_selected();
+  }
+  return 0;
+}
+
 void AppFlow::transition_to(AppState next) {
   if (screen_) {
     screen_->on_exit();
