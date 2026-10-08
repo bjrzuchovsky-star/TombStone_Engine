@@ -22,6 +22,8 @@ add_library(ts_editor
   screens/Editor2DScreen_Viewport.cpp
   screens/Editor2DScreen_Tiles.cpp
   screens/Editor2DScreen_TilePanels.cpp
+  screens/Editor2DScreen_Play.cpp
+  launch/GameLauncher.cpp
 )
 
 target_include_directories(ts_editor
@@ -33,6 +35,7 @@ target_link_libraries(ts_editor
   PUBLIC
     ts_core
     ts_scene
+    ts_runtime
     ts_gfx
     ts_imgui
 )

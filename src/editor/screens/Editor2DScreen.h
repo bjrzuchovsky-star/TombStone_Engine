@@ -5,9 +5,11 @@
 #include "editor/screens/IScreen.h"
 #include "editor/ui/FolderBrowser.h"
 #include "editor/workspace/Workspace2D.h"
+#include "runtime/PlaySession.h"
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -133,6 +135,31 @@ class Editor2DScreen final : public IScreen {
   const TextureInfo& texture(const std::string& rel);
   SpriteState sprite_state(const Entity2D& e);
 
+  // --- Play mode (Editor2DScreen_Play.cpp) -------------------------------------
+  // Play copies the whole edit workspace aside and runs a runtime::World
+  // built from it in the Viewport. Stop throws the world away and puts the
+  // workspace back exactly (entities, selection, view, undo history).
+  // Nothing done while playing writes scene.json or adds undo steps: edit
+  // tools are locked and saving is refused.
+  bool start_play();   // F5 / Ctrl+P
+  void stop_play();    // F5 / Ctrl+P / Stop button (Esc does not stop)
+  void toggle_play();
+  void toggle_pause_play();  // F6
+  bool step_play();          // F10 while paused: exactly one tick
+  bool is_playing() const { return play_.active(); }  // playing or paused
+  bool is_paused() const { return play_.paused(); }
+  const runtime::PlaySession& play_session() const { return play_; }
+  // Advance the running world by real time with this input. The viewport
+  // calls it every frame with keyboard / gamepad input; --smoke calls it
+  // with scripted input. Returns ticks run.
+  int update_play(double real_seconds, const runtime::InputFrame& input);
+  // Free (detached) editor camera while playing, instead of the follow cam.
+  bool play_free_camera() const { return play_free_cam_; }
+  void set_play_free_camera(bool on);
+  // Save, then start ts_game --project <this project> as its own process.
+  // False (with a status note) when ts_game is not built or will not start.
+  bool launch_game();
+
  private:
   void draw_ui();
   void draw_menu_bar();
@@ -142,6 +169,14 @@ class Editor2DScreen final : public IScreen {
   void draw_viewport();
   void draw_inspector();
   void draw_inspector_components(Entity2D& e);
+  // Player / Camera2D / SpawnPoint sections + "Add component".
+  void draw_inspector_gameplay(std::uint64_t id);
+  void draw_play_controls();   // toolbar Play / Pause / Step / Launch
+  void draw_play_viewport();   // Viewport2D while playing
+  void draw_play_status();     // status-bar section while playing
+  void draw_play_menu();
+  // Keyboard (WASD / arrows, Space, Shift, Enter) + gamepads via GLFW.
+  runtime::InputFrame poll_play_input() const;
   void draw_tile_palette();
   void draw_supply_wagon();
   // Shared asset picker combo; returns true + rel_out when a choice is made
@@ -255,6 +290,16 @@ class Editor2DScreen final : public IScreen {
   TextureCache textures_;
   FolderBrowser import_browser_;
   std::string wagon_selected_;  // highlighted asset in the Supply Wagon
+
+  // Play mode.
+  runtime::PlaySession play_;
+  std::optional<Workspace2D> play_backup_;  // the edit workspace, untouched
+  bool play_free_cam_ = false;
+  bool play_focus_viewport_ = false;  // focus Viewport2D on the next frame
+  float play_cam_x_ = 0.0f;
+  float play_cam_y_ = 0.0f;
+  float play_cam_zoom_ = 1.0f;
+  std::vector<runtime::DrawQuad> play_quads_;
 
   // Status-bar note (e.g. "Duplicated 3").
   std::string status_note_;

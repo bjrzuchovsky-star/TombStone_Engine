@@ -97,6 +97,11 @@ void Editor2DScreen::draw_help_menu_contents() {
   theme::KeyHint("I / Alt+click", "Pick tile from the map");
   theme::KeyHint("1 / 2 / 3", "Brush size (tile tools)");
   theme::KeyHint("Drag asset", "Supply Wagon -> viewport: new sprite");
+  ImGui::Separator();
+  theme::KeyHint("F5 / Ctrl+P", "Play / Stop (Stop restores the scene)");
+  theme::KeyHint("F6 / F10", "Pause / step one tick while paused");
+  theme::KeyHint("WASD / arrows", "Ride player 1 (gamepads: P1-P4)");
+  theme::KeyHint("C", "Free camera while playing");
 }
 
 void Editor2DScreen::draw_menu_bar() {
@@ -120,13 +125,17 @@ void Editor2DScreen::draw_menu_bar() {
   }
 
   if (ImGui::BeginMenu("File")) {
-    if (ImGui::MenuItem("Save Scene", "Ctrl+S")) {
+    if (ImGui::MenuItem("Save Scene", "Ctrl+S", false, !is_playing())) {
       std::string err;
       if (!save_scene(&err) && !err.empty()) {
         std::cout << "[Editor2D] save failed: " << err << '\n';
       } else {
         note("Scene saved");
       }
+    }
+    if (ImGui::MenuItem("Launch Game (ts_game)", nullptr, false,
+                        !is_playing())) {
+      launch_game();
     }
     ImGui::Separator();
     if (ImGui::MenuItem("Back to Projects")) {
@@ -138,7 +147,7 @@ void Editor2DScreen::draw_menu_bar() {
     ImGui::EndMenu();
   }
 
-  if (ImGui::BeginMenu("Edit")) {
+  if (ImGui::BeginMenu("Edit", !is_playing())) {
     const bool has_sel = workspace_.selection_count() > 0;
     {
       // Labels name the step ("Undo Move 3"); ### keeps the IDs stable.
@@ -199,6 +208,8 @@ void Editor2DScreen::draw_menu_bar() {
     ImGui::MenuItem("Toolbar", nullptr, &show_toolbar_);
     ImGui::MenuItem("Status Bar", nullptr, &show_status_bar_);
     ImGui::Separator();
+    // Grid / snap / camera are saved with the scene: edit mode only.
+    ImGui::BeginDisabled(is_playing());
     const bool grid = workspace_.show_grid();
     if (ImGui::MenuItem("Show Grid", "G", grid)) {
       workspace_.set_show_grid(!grid);
@@ -224,8 +235,11 @@ void Editor2DScreen::draw_menu_bar() {
       workspace_.set_pan(0.0f, 0.0f);
       workspace_.set_zoom(1.0f);
     }
+    ImGui::EndDisabled();
     ImGui::EndMenu();
   }
+
+  draw_play_menu();
 
   if (ImGui::BeginMenu("Help")) {
     draw_help_menu_contents();
@@ -237,6 +251,10 @@ void Editor2DScreen::draw_menu_bar() {
   ImGui::TextDisabled("(%s)", to_string(project_.kind));
   if (dirty_) {
     ImGui::TextColored(theme::Copper(), "*");
+  }
+  if (is_playing()) {
+    ImGui::TextColored(is_paused() ? theme::Warning() : theme::Copper(),
+                       is_paused() ? "  [PAUSED]" : "  [RIDING]");
   }
   ImGui::EndMainMenuBar();
 }
@@ -266,6 +284,11 @@ void Editor2DScreen::draw_toolbar() {
                       ImVec2(p.x + sz.x, p.y + sz.y),
                       theme::U32(theme::Copper(), 0.55f));
   }
+
+  draw_play_controls();
+  ImGui::SameLine(0.0f, 18.0f);
+  // Edit tools are locked while playing.
+  ImGui::BeginDisabled(is_playing());
 
   {
     const bool can_undo = workspace_.can_undo() || workspace_.edit_changed();
@@ -372,6 +395,7 @@ void Editor2DScreen::draw_toolbar() {
   }
   ImGui::SameLine(0.0f, 18.0f);
   ImGui::TextDisabled("zoom %.0f%%", workspace_.zoom() * 100.0f);
+  ImGui::EndDisabled();  // is_playing()
   ImGui::End();
   ImGui::PopStyleColor();
   ImGui::PopStyleVar(2);
@@ -433,32 +457,36 @@ void Editor2DScreen::draw_status_bar() {
   } else {
     ImGui::TextDisabled("grid %.0f px", workspace_.grid_size());
   }
-  sep();
-  if (tool_ != TileTool::Select) {
-    if (tool_ == TileTool::Paint || tool_ == TileTool::Erase) {
-      ImGui::TextColored(theme::Accent(), "%s %dx%d", to_string(tool_),
-                         brush_size_, brush_size_);
-    } else {
-      ImGui::TextColored(theme::Accent(), "%s", to_string(tool_));
-    }
-    if (hover_cell_valid_) {
-      ImGui::SameLine();
-      ImGui::TextDisabled("cell %d,%d tile %d", hover_col_, hover_row_,
-                          hover_tile_);
-    }
+  if (is_playing()) {
+    draw_play_status();
   } else {
-    ImGui::TextDisabled("Select");
-  }
-  sep();
-  const std::size_t count = workspace_.selection_count();
-  if (const Entity2D* e = workspace_.selected()) {
-    if (count > 1) {
-      ImGui::Text("%zu selected (%s)", count, e->name.c_str());
+    sep();
+    if (tool_ != TileTool::Select) {
+      if (tool_ == TileTool::Paint || tool_ == TileTool::Erase) {
+        ImGui::TextColored(theme::Accent(), "%s %dx%d", to_string(tool_),
+                           brush_size_, brush_size_);
+      } else {
+        ImGui::TextColored(theme::Accent(), "%s", to_string(tool_));
+      }
+      if (hover_cell_valid_) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("cell %d,%d tile %d", hover_col_, hover_row_,
+                            hover_tile_);
+      }
     } else {
-      ImGui::Text("%s @ %.0f, %.0f", e->name.c_str(), e->x, e->y);
+      ImGui::TextDisabled("Select");
     }
-  } else {
-    ImGui::TextDisabled("no selection");
+    sep();
+    const std::size_t count = workspace_.selection_count();
+    if (const Entity2D* e = workspace_.selected()) {
+      if (count > 1) {
+        ImGui::Text("%zu selected (%s)", count, e->name.c_str());
+      } else {
+        ImGui::Text("%s @ %.0f, %.0f", e->name.c_str(), e->x, e->y);
+      }
+    } else {
+      ImGui::TextDisabled("no selection");
+    }
   }
   const double now = ImGui::GetTime();
   if (!status_note_.empty() && now - status_note_time_ < 3.0) {
@@ -488,6 +516,30 @@ void Editor2DScreen::handle_hotkeys() {
   const bool shift = io.KeyShift;
   const bool alt = io.KeyAlt;
   const bool scene_focus = viewport_focused_ || hierarchy_focused_;
+
+  // Play mode keys. Esc deliberately does nothing here: only F5 / Ctrl+P /
+  // the Stop button end a ride.
+  if (drag_mode_ == DragMode::None || is_playing()) {
+    if ((ImGui::IsKeyPressed(ImGuiKey_F5, false) && !ctrl && !alt) ||
+        ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_P)) {
+      toggle_play();
+      return;
+    }
+  }
+  if (is_playing()) {
+    if (ImGui::IsKeyPressed(ImGuiKey_F6, false)) {
+      toggle_pause_play();
+    }
+    if (ImGui::IsKeyPressed(ImGuiKey_F10, true)) {
+      step_play();
+    }
+    if (!ctrl && !alt && !shift && ImGui::IsKeyPressed(ImGuiKey_C, false)) {
+      set_play_free_camera(!play_free_cam_);
+      note(play_free_cam_ ? "Free camera. C hands it back to the follow cam."
+                          : "Follow camera.");
+    }
+    return;  // every edit hotkey is locked while playing
+  }
 
   // Undo / redo (with key repeat). Not mid-drag or while a widget is held.
   if (drag_mode_ == DragMode::None && !ImGui::IsAnyItemActive()) {
@@ -601,6 +653,10 @@ void Editor2DScreen::handle_hotkeys() {
 }
 
 void Editor2DScreen::draw_ui() {
+  // Simulation first so this frame draws the newest ticks.
+  if (is_playing()) {
+    update_play(ImGui::GetIO().DeltaTime, poll_play_input());
+  }
   draw_menu_bar();
   draw_toolbar();
   draw_status_bar();
@@ -636,39 +692,59 @@ void Editor2DScreen::draw_ui() {
   hierarchy_focused_ = false;
   // NoNavInputs on the scene panels: arrow keys nudge entities instead of
   // moving the keyboard-nav cursor.
+  // While playing the scene panels stay visible but locked; the Viewport
+  // shows the running world.
+  const bool locked = is_playing();
   if (show_hierarchy_) {
     if (ImGui::Begin("Hierarchy", &show_hierarchy_,
                      ImGuiWindowFlags_NoNavInputs)) {
+      ImGui::BeginDisabled(locked);
       draw_hierarchy();
+      ImGui::EndDisabled();
     }
     ImGui::End();
   }
-  if (show_viewport_) {
+  if (show_viewport_ || play_focus_viewport_) {
+    show_viewport_ = true;
+    if (play_focus_viewport_) {
+      ImGui::SetNextWindowFocus();  // keys go to the ride, not a panel
+      play_focus_viewport_ = false;
+    }
     if (ImGui::Begin("Viewport2D", &show_viewport_,
                      ImGuiWindowFlags_NoNavInputs |
                          ImGuiWindowFlags_NoScrollbar |
                          ImGuiWindowFlags_NoScrollWithMouse)) {
-      draw_viewport();
+      if (locked) {
+        draw_play_viewport();
+      } else {
+        draw_viewport();
+      }
     }
     ImGui::End();
   }
   if (show_inspector_) {
     if (ImGui::Begin("Inspector", &show_inspector_)) {
+      ImGui::BeginDisabled(locked);
       draw_inspector();
+      ImGui::EndDisabled();
     }
     ImGui::End();
   }
   if (show_tile_palette_) {
     ImGui::SetNextWindowSize(ImVec2(300, 320), ImGuiCond_FirstUseEver);
     if (ImGui::Begin("Tile Palette", &show_tile_palette_)) {
+      ImGui::BeginDisabled(locked);
       draw_tile_palette();
+      ImGui::EndDisabled();
     }
     ImGui::End();
   }
   if (show_supply_wagon_) {
     ImGui::SetNextWindowSize(ImVec2(300, 320), ImGuiCond_FirstUseEver);
     if (ImGui::Begin("Supply Wagon", &show_supply_wagon_)) {
+      ImGui::BeginDisabled(locked);
       draw_supply_wagon();
+      ImGui::EndDisabled();
     }
     ImGui::End();
   }
