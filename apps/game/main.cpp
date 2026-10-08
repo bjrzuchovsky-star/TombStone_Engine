@@ -16,6 +16,7 @@
 #include "runtime/Log.h"
 #include "runtime/PlaySession.h"
 #include "runtime/World.h"
+#include "scene/SampleScripts.h"
 #include "scene/SceneJson.h"
 
 #if defined(__APPLE__)
@@ -202,6 +203,96 @@ runtime::InputFrame poll_input(GLFWwindow* win) {
   return frame;
 }
 
+// --smoke, part two: when the project still has the seeded corral gate and
+// gold nugget (scripts/gate.lua, scripts/gold.lua), ride them headless on a
+// fresh session: left onto the nugget, on to the gate, action button, and
+// through. Their Telegraph lines print as they happen. "" = all good.
+std::string ride_sample_scripts(const std::string& dir, Telegraph& telegraph,
+                                std::string* note) {
+  runtime::PlaySession session;
+  std::string err;
+  if (!session.start_project(dir, &err)) {
+    return err;
+  }
+  runtime::World& world = session.world();
+  std::uint64_t gate = 0;
+  std::uint64_t gold = 0;
+  for (const runtime::Actor& a : world.actors()) {
+    if (!a.data.script) continue;
+    if (a.data.script->path == sample_scripts::kGate) gate = a.data.id;
+    if (a.data.script->path == sample_scripts::kGold) gold = a.data.id;
+  }
+  const runtime::Actor* rider = world.player(0);
+  if (!gate || !gold || !rider) {
+    *note = "no sample gate / nugget in this scene";
+    return "";
+  }
+  const std::uint64_t rider_id = rider->data.id;
+  runtime::InputFrame left;
+  left.slot(0).move_x = -1.0f;
+  left.slot(0).connected = true;
+  runtime::InputFrame action = left;
+  action.slot(0).buttons = runtime::kButtonAction;
+  bool picked = false;
+  bool opened = false;
+  bool toasted = false;
+  auto tick = [&](const runtime::InputFrame& in) {
+    session.run_ticks(1, in);
+    for (const runtime::LogEntry& e : world.pending_logs()) {
+      picked |= e.file == sample_scripts::kGold &&
+                e.text.find("picked up") != std::string::npos;
+      opened |= e.file == sample_scripts::kGate &&
+                e.text.find("opened by P1") != std::string::npos;
+      toasted |= e.channel == "toast";
+      if (e.level == runtime::LogLevel::Error) {
+        err = runtime::format_log(e);
+      }
+    }
+    telegraph.drain(world);
+  };
+  // Left onto the nugget: pocketed, toasted, gone.
+  std::uint64_t gold_tick = 0;
+  for (int i = 0; i < 120 && world.find(gold) && err.empty(); ++i) {
+    tick(left);
+    gold_tick = session.tick();
+  }
+  const runtime::Actor* r = world.find(rider_id);
+  if (!err.empty()) return err;
+  if (world.find(gold) || !picked || !toasted || !r ||
+      r->state.count("gold") == 0 || r->state.at("gold").number != 10.0) {
+    return "the gold nugget should be pocketed (10 gold, toast, gone)";
+  }
+  // On to the gate: a solid wall until the action button.
+  const runtime::Actor* g = world.find(gate);
+  const float gate_right = g ? g->data.x + g->data.w : 0.0f;
+  for (int i = 0; i < 90; ++i) tick(left);
+  r = world.find(rider_id);
+  if (!r || std::fabs(r->data.x - gate_right) > 0.05f) {
+    return "the shut gate should stop the rider";
+  }
+  if (world.interact_target(rider_id) != gate) {
+    return "the gate should be the rider's action target";
+  }
+  tick(action);
+  const std::uint64_t gate_tick = session.tick();
+  g = world.find(gate);
+  if (!err.empty()) return err;
+  if (!opened || !g || !g->hidden || g->data.collider) {
+    return "the action button should swing the gate open";
+  }
+  for (int i = 0; i < 30; ++i) tick(left);
+  r = world.find(rider_id);
+  if (!err.empty()) return err;
+  if (!r || r->data.x >= g->data.x) {
+    return "the rider should ride through the open gate";
+  }
+  session.stop();
+  *note = "gold pocketed at tick " + std::to_string(gold_tick) +
+          ", gate opened by the action button at tick " +
+          std::to_string(gate_tick) + ", rode through";
+  return "";
+}
+
 // --smoke: everything the window does except the window.
 int run_smoke(const std::string& dir, Telegraph& telegraph) {
   auto fail = [](const std::string& what) {
@@ -336,6 +427,11 @@ int run_smoke(const std::string& dir, Telegraph& telegraph) {
   }
   telegraph.drain(world);
   session.stop();
+  std::string scripted;
+  const std::string script_err = ride_sample_scripts(dir, telegraph, &scripted);
+  if (!script_err.empty()) {
+    return fail("sample scripts: " + script_err);
+  }
   if (read_file(scene) != disk_before) {
     return fail("scene.json changed (the game must never write it)");
   }
@@ -347,7 +443,7 @@ int run_smoke(const std::string& dir, Telegraph& telegraph) {
             << "), " << trigger_events << " trigger event"
             << (trigger_events == 1 ? "" : "s") << ", " << telegraph.lines()
             << " telegraph line" << (telegraph.lines() == 1 ? "" : "s")
-            << ", scene.json untouched)\n";
+            << ", sample scripts: " << scripted << ", scene.json untouched)\n";
   return 0;
 }
 
