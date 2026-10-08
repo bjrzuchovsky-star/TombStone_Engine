@@ -108,7 +108,7 @@ apps/admin|client|game/ # Build targets controlled by TS_BUILD_*
 2. **Login** -- username/password, Login, Dev login, Settings  
 3. **ProjectManager** -- list projects, Open / double-click, New 2D (validated name), Settings, Logout; errors shown in-UI  
 4. **Settings** -- edit `projects_root` (Browse opens an in-app ImGui folder picker), theme, `auto_login_dev`, username; Apply/Save still validates, writes settings, and reloads projects  
-5. **Editor2D** -- live Hierarchy (create/duplicate/rename/delete, multi-select), Viewport2D canvas (drag-to-move, box select, snap-to-grid, pan MMB/RMB/Alt-drag, wheel zoom), Inspector (name, snapped transform, color/tint, layer/z, TileMap / Sprite / Player / Camera2D / Spawn Point sections) + Back, **Tile Palette** (tilemap painting) and **Supply Wagon** (project images); File → Save Scene; **Play / Pause / Stop** runs the scene in the Viewport  
+5. **Editor2D** -- live Hierarchy (create/duplicate/rename/delete, multi-select), Viewport2D canvas (drag-to-move, box select, snap-to-grid, pan MMB/RMB/Alt-drag, wheel zoom), Inspector (name, snapped transform, color/tint, layer/z, TileMap / Sprite / Player / Camera2D / Spawn Point / Collision / Animator sections) + Back, **Tile Palette** (tilemap painting), **Stable** (animation sets) and **Supply Wagon** (project images); File → Save Scene; **Play / Pause / Stop** runs the scene in the Viewport  
 
 Namespace: `ts::tombstone::editor`.
 
@@ -123,7 +123,7 @@ Admin has its own look, kept in `src/editor/ui/Theme` (palette, metrics, custom-
 - Sharp 2-3 px corners with 1 px inked frame borders. Custom-drawn section headers (amber diamond, label, caption, fading copper rule), ornamental dividers, a headstone mark, title strips, and a branded progress bar. Hover and active states go copper and amber.
 - Copy keeps one short, dry voice: splash "TOMBSTONE / Four riders. One frontier. Build it right.", login "Sign the ledger. Ride in.", Project Manager "Claims" / "Break Ground" / "Bury Project?", and Settings sections "Territory / Rider / Lamplight / Trail". The editor status bar carries the brand, and the window title follows the open project.
 
-Editor2D runs in an ImGui **Docking** layout (Hierarchy over Supply Wagon / Viewport2D / Inspector over Tile Palette) with a tool strip (Undo, Redo, Select/Brush/Erase/Fill/Rect/Pick tools + brush swatch, Grid, Snap, cell size, Duplicate, Delete, Reset Cam, Save) and a status bar (fps, zoom, grid/snap, selection, recent action, path). Docking and multi-viewport flags are enabled in `apps/admin/main.cpp`.
+Editor2D runs in an ImGui **Docking** layout (Hierarchy over Supply Wagon / Viewport2D / Inspector over Tile Palette and Stable) with a tool strip (Undo, Redo, Select/Brush/Erase/Fill/Rect/Pick tools + brush swatch, Grid, Snap, cell size, Duplicate, Delete, Reset Cam, Save) and a status bar (fps, zoom, grid/snap, selection, recent action, path). Docking and multi-viewport flags are enabled in `apps/admin/main.cpp`.
 
 ### Editor2D tools
 
@@ -192,7 +192,7 @@ Gameplay components are edited in the Inspector (each change is one undo step):
 - **Camera2D**: follow target, smoothing (seconds; 0 = locked on), zoom, optional bounds rect (**Fit to TileMap**). With no Camera2D the game follows player 1.
 - **Spawn Point**: the player in this slot starts centred on it.
 
-New projects seed **Player** with a P1 controller and a dynamic collider, and **Camera2D** following it.
+New projects seed **Player** with a P1 controller, a dynamic collider and the animated sample cowboy (see Sprite animation), and **Camera2D** following it.
 
 ### Collision and solid tiles
 
@@ -219,6 +219,72 @@ The game is top-down with no gravity: up to four riders move freely and the runt
 
 A legend sits in the Viewport's bottom-left corner. In edit mode the overlay reflects the scene as edited, and in Play it reflects the live World. K is ignored while typing in a text field.
 
+### Sprite animation (the Stable)
+
+Animation is data in `src/scene/Animation` and a per-tick system in `src/runtime/World_Anim.cpp`, so the editor's Play mode and `ts_game` run the same code. Neither knows a renderer: the World hands out the current frame as UVs in its draw list.
+
+**Animation sets.** A sprite sheet gets a `<name>.anim.json` beside it in `<project>/assets/` (`assets/rider.png` -> `assets/rider.anim.json`). It holds the grid the sheet is cut into and a list of named clips. Any number of entities can share one set; editing the set changes all of them.
+
+**Animator component.** An entity carries `set` (the `.anim.json`, project-relative), `clip` (the clip the ride starts on; empty = the default), `default_clip` (empty = the set's default), `speed` (0..16, 1 = as authored) and `playing` (off holds the frame). The sprite keeps its image and source rect as the stand-in if the set goes missing.
+
+**Timing.** Animators advance on the fixed 60 Hz tick by `1/60 x speed` seconds, never on the frame rate. A clip runs at `fps` or, when `ms` lists per-frame durations, at those. Modes:
+
+| Mode | Frames for a 4-frame clip |
+|---|---|
+| `loop` | 0 1 2 3 0 1 2 3 ... |
+| `once` | 0 1 2 3 3 3 ... (then reports finished) |
+| `ping_pong` | 0 1 2 3 2 1 0 1 2 ... |
+
+**Riders pick their own clips.** An entity with both a Player controller and an animator picks `walk_<dir>` while its stick is pushed and `idle_<dir>` when it lets go, with `<dir>` one of `down`, `up`, `left`, `right`. The heading follows the dominant axis of the input (a 0.2 deadzone). On a diagonal it keeps the current heading if that key is still held, otherwise the horizontal one wins. Idle keeps the last heading, so a rider that stops after riding left stands facing left. Sets can be thinner than four directions:
+
+1. `walk_left` missing: `walk_right` drawn mirrored (and the other way round).
+2. `walk_up` / `walk_down` missing: the side clip the rider last faced.
+3. Then `walk_down`, then a bare `walk` (mirrored when facing left).
+4. Idle runs the same chain with `idle`. A walking rider whose set has no walk clips at all uses the idle chain. If nothing matches, the rider plays the animator's default clip, then the set's.
+
+Turning while walking keeps the stride (walk_right frame 2 becomes walk_down frame 2); stopping starts the idle from frame 0. Other animators play their start clip (the authored `clip`, else the default) and never switch on their own.
+
+**Playing a clip by name.** `World::play_clip(id, "tip_hat", restart = true, hold = false)` switches an animator to any clip in its set and returns false when there is no such clip. On a rider the next auto-pick takes over again unless `hold` is true; `World::release_clip(id)` hands it back. This is the hook scripting will call.
+
+**The Stable** (View -> Stable (Animation), tabbed beside the Tile Palette) is the animation-set panel:
+
+- **Sheet**: pick any Supply Wagon image (`[set]` marks one that already has a `.anim.json`). A sheet without one starts a new set cut into 32 px cells, written on the first edit. **Open in Stable** in the Inspector opens an animator's set.
+- **Slice**: frame W x H, then **Slice**. Columns and rows are fitted to the image, and clips are clamped into the new grid.
+- **Clips**: the list shows frames, fps and mode, with `*` on the default. **+ Clip** starts at the last frame clicked; **Make default**, **Turn out** (delete), **Name** (Enter renames), **FPS** and **Mode** edit the selected clip.
+- **Frames**: a thumbnail strip of every cell. Click a cell to start the selected clip there, then Shift+click the last frame.
+- **Preview**: the selected clip running at its real pace, with **Hold** / **Ride** and **Restart**.
+
+Stable edits save straight to the `.anim.json` (they are not undo steps and do not touch `scene.json`).
+
+**Inspector -> Animator.** **Add Animator** (it picks the sheet's set when there is one), then the set, start clip, default clip, speed, playing, **Open in Stable** and **Remove**. Each change is one undo step and autosaves `scene.json`; a whole Speed drag is one step.
+
+**Viewport.** In edit mode animators show their default clip, running when **View -> Preview Animations** is on (the default) and resting on frame 0 when it is off. Dragging a sheet that has a `.anim.json` from the Supply Wagon stakes an animated entity one frame in size ("Create Animated Sprite", one undo step).
+
+**The sample rider.** New scenes (and **Reset Scene Placeholders**) write `assets/rider.png` and `assets/rider.anim.json` if they are missing, and P1 rides it. The cowboy is drawn pixel by pixel in code (`src/scene/SampleRider.cpp`) and saved as a PNG, so the project carries no third-party art. The sheet is 192 x 192: 32 x 48 frames, 6 columns (idle 0-1, walk 2-5) and 4 rows (down, up, left, right). There are eight clips, `idle_*` at 3 fps and `walk_*` at 8 fps, and the default is `idle_down`. Existing files are never overwritten.
+
+#### `.anim.json` format
+
+```json
+{
+  "version": 1,
+  "image": "rider.png",
+  "grid": {"frame_w": 32, "frame_h": 48, "cols": 6, "rows": 4},
+  "default_clip": "idle_down",
+  "clips": [
+    {"name": "idle_down", "fps": 3, "mode": "loop", "start": 0, "count": 2},
+    {"name": "walk_down", "fps": 8, "mode": "loop", "start": 2, "count": 4},
+    {"name": "tip_hat", "fps": 6, "mode": "ping_pong", "frames": [{"x": 0, "y": 0, "w": 32, "h": 48}, {"x": 32, "y": 48, "w": 32, "h": 48}], "ms": [120, 240]}
+  ]
+}
+```
+
+- `image` is relative to the `.anim.json`'s folder.
+- `grid` cuts the sheet into `cols x rows` cells of `frame_w x frame_h`, numbered row-major from the top-left (cell 7 of a 6-column grid is column 1 of row 1).
+- A **grid clip** uses `start` and `count` cells. A **rect clip** lists explicit source rects in `frames`.
+- `fps` is frames per second (0.1-120). The optional `ms` gives per-frame durations in milliseconds that override `fps`.
+- `mode` is `loop`, `once` or `ping_pong`. `default_clip` is the clip animators fall back to (empty = the first clip).
+- The writer is deterministic, with one clip per line. Unknown modes, duplicate clip names, a newer `version` or broken JSON are rejected with a reason, and the entity falls back to its sprite.
+
 ### ts_game (the standalone game)
 
 ```bash
@@ -226,13 +292,13 @@ A legend sits in the Viewport's bottom-left corner. In edit mode the overlay ref
 ./build/apps/game/ts_game --smoke --project <dir>    # headless: load, ride 60 ticks, verify, exit
 ```
 
-`ts_game` opens its own GLFW window (1280x720, resizable), loads `<project>/scene.json` and its images through the runtime, and draws tilemaps and sprites with a small fixed-function OpenGL renderer (no ImGui, no editor code). Keys: WASD / arrows (and gamepads 1-4) ride, P or F6 pause, F10 step while paused, R or F5 reload `scene.json` from disk, K collision overlay (same colours as the editor; `--collision` starts with it on), Esc quit. The title bar shows P1's position and the latest trigger event. The editor's **Launch Game** finds `ts_game` next to `ts_admin` or in the build tree (`build/apps/game/`); if it isn't built it says so (configure with `-DTS_BUILD_GAME=ON`).
+`ts_game` opens its own GLFW window (1280x720, resizable), loads `<project>/scene.json`, its images and `.anim.json` sets through the runtime, and draws tilemaps and (animated) sprites with a small fixed-function OpenGL renderer (no ImGui, no editor code). Keys: WASD / arrows (and gamepads 1-4) ride, P or F6 pause, F10 step while paused, R or F5 reload `scene.json` from disk, K collision overlay (same colours as the editor; `--collision` starts with it on), Esc quit. The title bar shows P1's position and the latest trigger event. The editor's **Launch Game** finds `ts_game` next to `ts_admin` or in the build tree (`build/apps/game/`); if it isn't built it says so (configure with `-DTS_BUILD_GAME=ON`).
 
-**Runtime architecture.** `src/scene` owns the data (Entity2D and its optional components, tilemaps, the scene.json reader/writer) and `src/runtime` owns the game: a `World` built from a copy of the entities, advanced by a `PlaySession` at a fixed 60 Hz (accumulator, at most 8 catch-up ticks per frame) from an abstract per-player `InputFrame` (move x/y + action buttons for slots 0-3), with a follow camera and a renderer-neutral draw list (world-space quads + UVs) interpolated between ticks. Neither library knows about ImGui or OpenGL: the editor feeds it keyboard/gamepad input and draws the list with ImGui, `ts_game` feeds GLFW input and draws it with OpenGL, and `--smoke` feeds scripted input. Collision runs inside the World's tick (see above). Animation, scripting and networked players (a local server plus up to four clients) slot in as more per-tick systems and more `InputFrame` sources without touching the editor.
+**Runtime architecture.** `src/scene` owns the data (Entity2D and its optional components, tilemaps, the scene.json reader/writer) and `src/runtime` owns the game: a `World` built from a copy of the entities, advanced by a `PlaySession` at a fixed 60 Hz (accumulator, at most 8 catch-up ticks per frame) from an abstract per-player `InputFrame` (move x/y + action buttons for slots 0-3), with a follow camera and a renderer-neutral draw list (world-space quads + UVs) interpolated between ticks. Neither library knows about ImGui or OpenGL: the editor feeds it keyboard/gamepad input and draws the list with ImGui, `ts_game` feeds GLFW input and draws it with OpenGL, and `--smoke` feeds scripted input. Collision and animation run inside the World's tick (see above). Scripting and networked players (a local server plus up to four clients) slot in as more per-tick systems and more `InputFrame` sources without touching the editor.
 
 ### scene.json format
 
-`"version": 4` (current). Every entity has id/name, x/y/w/h, r/g/b/a and layer, plus optional component objects. Version 2 added `tilemap` and `sprite`, version 3 added the gameplay components `player`, `camera` and `spawn`, and version 4 adds `collider` and the top-level `tile_solidity`:
+`"version": 5` (current). Every entity has id/name, x/y/w/h, r/g/b/a and layer, plus optional component objects. Version 2 added `tilemap` and `sprite`, version 3 added the gameplay components `player`, `camera` and `spawn`, version 4 added `collider` and the top-level `tile_solidity`, and version 5 adds `animator`:
 
 ```json
 "tilemap": {"cols": 8, "rows": 2, "tile_size": 32, "tileset": "", "encoding": "rle", "data": "8*4,8*1"},
@@ -240,7 +306,8 @@ A legend sits in the Viewport's bottom-left corner. In edit mode the overlay ref
 "player": {"slot": 0, "speed": 160},
 "camera": {"target": 2, "smoothing": 0.15, "zoom": 1, "use_bounds": false, "bounds_x": 0, "bounds_y": 0, "bounds_w": 1024, "bounds_h": 768},
 "spawn": {"slot": 0},
-"collider": {"x": 0, "y": 0, "w": 32, "h": 48, "type": "solid", "body": "dynamic"}
+"collider": {"x": 0, "y": 0, "w": 32, "h": 48, "type": "solid", "body": "dynamic"},
+"animator": {"set": "assets/rider.anim.json", "clip": "", "default_clip": "", "speed": 1, "playing": true}
 ```
 
 `collider` x/y are the offset from the entity's top-left corner, `type` is `solid` or `trigger`, and `body` is `static` or `dynamic`. The scene's `tile_solidity` lists the solid tile ids of each tileset that differs from the defaults (`""` = the built-in palette). A listed tileset uses exactly its list, and a toggle that brings a tileset back to its defaults drops its entry:
@@ -252,13 +319,15 @@ A legend sits in the Viewport's bottom-left corner. In edit mode the overlay ref
 ]
 ```
 
-Older files still load: a v1 entity named `TileMap*` becomes an empty 32 px grid covering its old rect, and a v1/v2 scene with no gameplay components gets a P1 controller on the entity named `Player` and a follow camera on `Camera2D` (targeting Player), so old projects play straight away. A v1-v3 scene gives every `player` entity a default dynamic collider (its whole rect) and starts with default tile solidity. A v4 rider without a collider stays a ghost. The file is written as v4 on the next save.
+Older files still load: a v1 entity named `TileMap*` becomes an empty 32 px grid covering its old rect, and a v1/v2 scene with no gameplay components gets a P1 controller on the entity named `Player` and a follow camera on `Camera2D` (targeting Player), so old projects play straight away. A v1-v3 scene gives every `player` entity a default dynamic collider (its whole rect) and starts with default tile solidity. A v4 rider without a collider stays a ghost. v1-v4 files load with no animators (nothing is added). The file is written as v5 on the next save.
 
 `data` is row-major run-length text: comma-separated `count*id` runs (a single cell is just `id`).
 
 `--smoke` also runs the runtime headless: scripted input moves the player exactly speed x time at 60 Hz (diagonals clamped), the camera follows and respects bounds, spawn points place riders, pause holds the world and step runs exactly one tick, Play -> Stop in the editor restores the workspace byte-for-byte with undo history and `scene.json` (bytes and mtime) untouched, edit tools are locked while playing, and a v2 project opens and plays.
 
 Collision `--smoke`: a rider stops flush on a solid tile with zero speed, slides along a wall while pushing diagonally (keeping exactly the parallel motion), never tunnels at 5000 px/s through a tile or a 4 px fence, is blocked by a static crate and shoves a dynamic one, and respects `tile_solidity` overrides. Two riders dropped inside each other separate half each and never overlap while charging head-on. A trigger fires one enter and one exit on the expected ticks. The overlay boxes are checked, along with the v3 -> v4 upgrade and a byte-identical v4 roundtrip. The editor half toggles a palette tile (one undo step, `scene.json` in sync through undo / redo), removes and edits a collider with undo / redo, then plays: the rider stops on the newly solid tile, rides into a trigger exactly once, collision edits are locked, and Stop leaves solidity and `scene.json` alone. `ts_game --smoke` checks P1's collider shows in the overlay and reports the box and trigger counts.
+
+Animation `--smoke`: clip timing is checked tick by tick at 60 Hz for loop, once (finishes on the right tick), ping-pong and per-frame `ms`. It also checks the `.anim.json` byte-identical roundtrip, its layout and rejects, the grid slice, library reload on change, and v4 -> v5 (a v4 scene loads untouched; animators roundtrip). The runtime half rides a 4-direction set and a right-only set. Each heading picks the right walk clip and idle keeps it. It checks diagonals, a stride kept through a turn, left drawn as mirrored right (with flipped UVs in the draw list), `play_clip` hold / release, pause, speed and the missing-set fallback. The editor half opens a fresh project: the rider sheet and set are seeded, the preview frames are checked, and animator edits are one undo step each with `scene.json` in sync through undo / redo / remove. Play walks right through at least three frame changes, then idles facing right, animator edits are locked, and Stop restores the workspace and `scene.json` byte for byte. It also checks animated and plain Supply Wagon drops, and Stable slice / add / rename / timing / range / default / delete landing in the `.anim.json` with no undo steps. `ts_game --smoke` rides P1 right and requires the drawn rider frame to change within `walk_right`.
 
 The editor `--smoke` also paints a multi-cell stroke and checks it is one undo step, a 2x2 brush, erase, a cancelled stroke, bucket fill, rect fill/erase, eyedropper, resize (keeps tiles; undo restores cut cells), tile size, undo-all / redo-all with `scene.json` in sync, the v2 RLE roundtrip, the v1 upgrade, sprite drop-create / assign / flip / source-rect roundtrip with undo/redo, missing and corrupt image fallbacks, tileset slicing, and import.
 
