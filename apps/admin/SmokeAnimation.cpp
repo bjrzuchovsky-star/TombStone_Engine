@@ -463,5 +463,5 @@ int run_animation_smoke() {
                "mirrored for left, frame UVs + flip in the draw list, "
                "play_clip hold/release, pause + speed, missing set "
                "fallback)\n";
-  return 0;
+  return run_animation_editor_smoke();
 }

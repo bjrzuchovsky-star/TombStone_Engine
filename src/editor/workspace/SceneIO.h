@@ -13,7 +13,7 @@ namespace scene_io {
 // scene.json format version written by save(); the format itself lives in
 // scene/SceneJson (shared with the runtime). 1 = entities only; 2 = adds
 // "tilemap" / "sprite"; 3 = adds "player" / "camera" / "spawn"; 4 = adds
-// "collider" and the scene-level "tile_solidity" table.
+// "collider" and the scene-level "tile_solidity" table; 5 = adds "animator".
 inline constexpr int kSceneVersion = scene_json::kSceneVersion;
 
 // Per-project Editor2D persistence: <project_dir>/scene.json
