@@ -4,6 +4,7 @@
 add_library(ts_scene
   Animation.cpp
   JsonFlat.cpp
+  SampleRider.cpp
   Scene.cpp
   SceneData.cpp
   SceneJson.cpp

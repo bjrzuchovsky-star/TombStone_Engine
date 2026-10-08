@@ -1,5 +1,7 @@
 #include "editor/workspace/Workspace2D.h"
 
+#include "scene/SampleRider.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -61,6 +63,15 @@ void Workspace2D::reset_defaults() {
   player.player = PlayerControllerData{};
   // Bumps into solid tiles and static colliders (whole rect, dynamic).
   player.collider = default_collider(player);
+  // The sample cowboy sheet (written into assets/ when a scene is seeded):
+  // the sprite shows the first idle frame, the animator rides the rest.
+  player.sprite = SpriteData{};
+  player.sprite->path = sample_rider::kImage;
+  player.sprite->use_src_rect = true;
+  player.sprite->src_w = sample_rider::kFrameW;
+  player.sprite->src_h = sample_rider::kFrameH;
+  player.animator = AnimatorData{};
+  player.animator->set = sample_rider::kSet;
   entities_.push_back(player);
   // The seeded camera trails the rider.
   Camera2DData follow;

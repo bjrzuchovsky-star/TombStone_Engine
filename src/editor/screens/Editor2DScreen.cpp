@@ -2,6 +2,7 @@
 
 #include "editor/assets/AssetLibrary.h"
 #include "editor/workspace/SceneIO.h"
+#include "scene/SampleRider.h"
 
 #include <imgui.h>
 
@@ -66,6 +67,11 @@ void Editor2DScreen::on_enter() {
     }
     workspace_.reset_defaults();
     if (!project_.path.empty()) {
+      // The seeded Player rides the sample cowboy sheet.
+      std::string rider_err;
+      if (!sample_rider::write_into_project(project_.path, &rider_err)) {
+        std::cout << "[Editor2D] sample rider: " << rider_err << '\n';
+      }
       std::string save_err;
       if (scene_io::save(workspace_, scene_path_, &save_err)) {
         std::cout << "[Editor2D] wrote initial scene.json to " << scene_path_
@@ -274,6 +280,7 @@ void Editor2DScreen::reset_scene_placeholders() {
   cancel_rename();
   Workspace2D::Snapshot before = prepare_edit();
   workspace_.reset_defaults();
+  sample_rider::write_into_project(project_.path);
   workspace_.commit_step("Reset Scene", std::move(before));
   has_range_anchor_ = false;
   mark_dirty_and_autosave();
