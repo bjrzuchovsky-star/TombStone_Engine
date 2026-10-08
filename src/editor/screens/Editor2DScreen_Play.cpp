@@ -99,11 +99,13 @@ bool Editor2DScreen::start_play() {
   play_cam_x_ = cam.x;
   play_cam_y_ = cam.y;
   play_cam_zoom_ = cam.zoom;
+  play_scripts_poll_ = now_seconds();
   if (play_.world().player_count() == 0) {
     note("Riding. Nobody in the saddle: give an entity a Player component.");
   } else {
-    note("Riding. WASD / arrows to move, F6 pause, F5 stop.");
+    note("Riding. WASD / arrows to move, E / Space action, F6 pause, F5 stop.");
   }
+  pump_play_logs();
   std::cout << "[Editor2D] play: " << play_.world().actors().size()
             << " actors, " << play_.world().player_count() << " rider(s)\n";
   return true;
@@ -114,6 +116,7 @@ void Editor2DScreen::stop_play() {
     return;
   }
   const std::uint64_t ticks = play_.tick();
+  pump_play_logs();  // the last words of the ride
   play_.stop();
   if (play_backup_) {
     workspace_ = std::move(*play_backup_);
@@ -154,12 +157,23 @@ bool Editor2DScreen::step_play() {
   const runtime::InputFrame input = ImGui::GetCurrentContext() != nullptr
                                         ? poll_play_input()
                                         : runtime::InputFrame{};
-  return play_.step_once(input);
+  const bool stepped = play_.step_once(input);
+  pump_play_logs();
+  return stepped;
 }
 
 int Editor2DScreen::update_play(double real_seconds,
                                 const runtime::InputFrame& input) {
-  return play_.update(real_seconds, input);
+  const int ticks = play_.update(real_seconds, input);
+  // Saved scripts ride back in twice a second (a broken save keeps the old
+  // version and says why on the Telegraph).
+  const double now = now_seconds();
+  if (is_playing() && now - play_scripts_poll_ >= 0.5) {
+    play_scripts_poll_ = now;
+    reload_play_scripts();
+  }
+  pump_play_logs();
+  return ticks;
 }
 
 void Editor2DScreen::set_play_free_camera(bool on) {
@@ -213,7 +227,10 @@ runtime::InputFrame Editor2DScreen::poll_play_input() const {
         down(ImGuiKey_D, ImGuiKey_RightArrow),
         down(ImGuiKey_W, ImGuiKey_UpArrow),
         down(ImGuiKey_S, ImGuiKey_DownArrow));
-    if (ImGui::IsKeyDown(ImGuiKey_Space)) keys.buttons |= runtime::kButtonAction;
+    // Action (E / Space / pad A): talk to, open or pick up what is nearby.
+    if (ImGui::IsKeyDown(ImGuiKey_E) || ImGui::IsKeyDown(ImGuiKey_Space)) {
+      keys.buttons |= runtime::kButtonAction;
+    }
     if (ImGui::IsKeyDown(ImGuiKey_LeftShift)) keys.buttons |= runtime::kButtonAlt;
     if (ImGui::IsKeyDown(ImGuiKey_Enter)) keys.buttons |= runtime::kButtonStart;
     frame.slot(0) = keys;
@@ -349,7 +366,7 @@ void Editor2DScreen::draw_play_status() {
   }
   sep();
   ImGui::TextDisabled(play_free_cam_ ? "free camera" : "follow camera");
-  // Last trigger event (no behaviour yet: scripts will hook these).
+  // Last trigger event (scripts hook these; the Telegraph keeps them all).
   const std::string trig = last_trigger_text();
   if (!trig.empty()) {
     sep();
@@ -358,6 +375,38 @@ void Editor2DScreen::draw_play_status() {
 }
 
 // --- Viewport while playing -----------------------------------------------------
+
+void Editor2DScreen::draw_play_toasts(ImDrawList* draw, const ImVec2& canvas_pos,
+                                      const ImVec2& canvas_size) {
+  const runtime::World& world = play_.world();
+  const bool tag = world.player_count() > 1;
+  const float pad_x = 12.0f;
+  const float pad_y = 6.0f;
+  float bottom = canvas_pos.y + canvas_size.y - 28.0f;
+  const auto& toasts = world.toasts();
+  // Newest at the bottom, older ones stacked above it.
+  for (auto it = toasts.rbegin(); it != toasts.rend(); ++it) {
+    std::string text = it->text;
+    if (tag && it->slot >= 0) {
+      text = "P" + std::to_string(it->slot + 1) + ": " + text;
+    }
+    const std::uint64_t left =
+        it->until >= world.tick() ? it->until - world.tick() : 0;
+    const float a = left >= 30 ? 1.0f : static_cast<float>(left + 1) / 31.0f;
+    const ImVec2 text_size = ImGui::CalcTextSize(text.c_str());
+    const ImVec2 p0(canvas_pos.x + (canvas_size.x - text_size.x) * 0.5f - pad_x,
+                    bottom - text_size.y - pad_y * 2.0f);
+    const ImVec2 p1(p0.x + text_size.x + pad_x * 2.0f, bottom);
+    if (p0.y < canvas_pos.y) {
+      break;
+    }
+    draw->AddRectFilled(p0, p1, theme::U32(theme::Charcoal(), 0.9f * a), 3.0f);
+    draw->AddRect(p0, p1, theme::U32(theme::Copper(), a), 3.0f, 0, 1.5f);
+    draw->AddText(ImVec2(p0.x + pad_x, p0.y + pad_y),
+                  theme::U32(theme::Sand(), a), text.c_str());
+    bottom = p0.y - 6.0f;
+  }
+}
 
 void Editor2DScreen::draw_play_viewport() {
   viewport_focused_ =
@@ -369,8 +418,8 @@ void Editor2DScreen::draw_play_viewport() {
         "HOLDING UP | F6 ride on | F10 step one tick | F5 / Stop ends the ride");
   } else {
     ImGui::TextUnformatted(
-        "RIDING | WASD / arrows move P1 | gamepads P1-P4 | F6 pause | C free "
-        "camera | K collision | F5 / Stop ends the ride");
+        "RIDING | WASD / arrows move P1 | E / Space action | gamepads P1-P4 | "
+        "F6 pause | C free camera | K collision | F5 / Stop ends the ride");
   }
   ImGui::PopStyleColor();
 
@@ -470,6 +519,7 @@ void Editor2DScreen::draw_play_viewport() {
     draw->AddText(ImVec2(at.x - tw * 0.5f, at.y - ImGui::GetTextLineHeight() - 2.0f),
                   theme::U32(theme::Accent()), tag);
   }
+  draw_play_toasts(draw, canvas_pos, canvas_size);
   if (is_paused()) {
     draw->AddRectFilled(canvas_pos, canvas_end,
                         theme::U32(theme::Charcoal(), 0.35f));
@@ -697,6 +747,8 @@ void Editor2DScreen::draw_inspector_gameplay(std::uint64_t id) {
   }
   // Collider: AABB, solid / trigger, static / dynamic.
   draw_inspector_collider(id);
+  // Script: file + per-entity props.
+  draw_inspector_script(id);
 }
 
 }  // namespace editor
