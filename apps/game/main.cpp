@@ -4,13 +4,16 @@
 //
 //   ts_game --project <dir>            ride the project
 //   ts_game --smoke --project <dir>    headless check (no window)
+//   ts_game --project <dir> --log <f>  also keep the Telegraph in <f>
 
 #include "GameRenderer.h"
+#include "HudText.h"
 
 #include "core/JsonMini.h"
 #include "gfx/GlTextureUploader.h"
 #include "gfx/TextureCache.h"
 #include "runtime/Input.h"
+#include "runtime/Log.h"
 #include "runtime/PlaySession.h"
 #include "runtime/World.h"
 #include "scene/SceneJson.h"
@@ -39,13 +42,17 @@ using game::GameRenderer;
 
 constexpr const char* kUsage =
     "Usage: ts_game --project <dir> [--smoke] [--frames N] [--collision]\n"
+    "               [--log <file>]\n"
     "  --project <dir>  TombStone project folder (holds scene.json)\n"
     "  --smoke          headless check: load, ride 60 ticks, verify, exit\n"
     "  --frames N       quit after N rendered frames (testing)\n"
     "  --collision      start with the collision overlay on (K)\n"
-    "Keys: WASD / arrows move P1 | gamepads ride P1-P4 | P or F6 pause |\n"
-    "      F10 step while paused | R or F5 reload scene.json |\n"
-    "      K collision overlay | Esc quit\n";
+    "  --log <file>     also write the Telegraph (script, toast and trigger\n"
+    "                   log lines, always on stdout) to <file>\n"
+    "Keys: WASD / arrows move P1 | E / Space / pad A action |\n"
+    "      gamepads ride P1-P4 | P or F6 pause | F10 step while paused |\n"
+    "      R or F5 reload scene.json | K collision overlay | Esc quit\n"
+    "Scripts under <project>/scripts/ hot-reload when saved.\n";
 
 struct Options {
   std::string project;
@@ -53,6 +60,7 @@ struct Options {
   long frames = -1;
   bool collision = false;
   bool help = false;
+  std::string log_path;
 };
 
 bool parse_args(int argc, char** argv, Options* out, std::string* err) {
@@ -64,6 +72,8 @@ bool parse_args(int argc, char** argv, Options* out, std::string* err) {
       out->smoke = true;
     } else if (a == "--frames" && i + 1 < argc) {
       out->frames = std::strtol(argv[++i], nullptr, 10);
+    } else if (a == "--log" && i + 1 < argc) {
+      out->log_path = argv[++i];
     } else if (a == "--collision") {
       out->collision = true;
     } else if (a == "--help" || a == "-h") {
@@ -98,6 +108,48 @@ std::string project_name(const std::string& dir) {
   return leaf.empty() ? std::string("TombStone") : leaf;
 }
 
+// The Telegraph on the wire: every world log line (scripts, toasts,
+// trigger events) goes to stdout, and to --log <file> when asked.
+class Telegraph {
+ public:
+  bool open(const std::string& path, std::string* err) {
+    if (path.empty()) {
+      return true;
+    }
+    file_.open(fs::path(path), std::ios::binary | std::ios::trunc);
+    if (!file_) {
+      *err = "could not open log file " + path;
+      return false;
+    }
+    return true;
+  }
+
+  // Prints and forgets everything the world wrote since the last drain.
+  void drain(runtime::World& world) {
+    for (const runtime::LogEntry& e : world.take_logs()) {
+      const std::string line = runtime::format_log(e, true);
+      std::cout << "[telegraph] " << line << '\n';
+      if (file_) {
+        file_ << line << '\n';
+      }
+      ++lines_;
+      errors_ += e.level == runtime::LogLevel::Error ? 1 : 0;
+    }
+    std::cout.flush();
+    if (file_) {
+      file_.flush();
+    }
+  }
+
+  long lines() const { return lines_; }
+  long errors() const { return errors_; }
+
+ private:
+  std::ofstream file_;
+  long lines_ = 0;
+  long errors_ = 0;
+};
+
 float deadzone(float v) {
   constexpr float kDead = 0.2f;
   if (std::fabs(v) < kDead) {
@@ -115,7 +167,8 @@ runtime::InputFrame poll_input(GLFWwindow* win) {
   runtime::PlayerInput keys = runtime::digital_input(
       down(GLFW_KEY_A, GLFW_KEY_LEFT), down(GLFW_KEY_D, GLFW_KEY_RIGHT),
       down(GLFW_KEY_W, GLFW_KEY_UP), down(GLFW_KEY_S, GLFW_KEY_DOWN));
-  if (glfwGetKey(win, GLFW_KEY_SPACE) == GLFW_PRESS) {
+  // Action (E / Space / pad A): talk to, open or pick up what is nearby.
+  if (down(GLFW_KEY_E, GLFW_KEY_SPACE)) {
     keys.buttons |= runtime::kButtonAction;
   }
   if (glfwGetKey(win, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) {
@@ -150,7 +203,7 @@ runtime::InputFrame poll_input(GLFWwindow* win) {
 }
 
 // --smoke: everything the window does except the window.
-int run_smoke(const std::string& dir) {
+int run_smoke(const std::string& dir, Telegraph& telegraph) {
   auto fail = [](const std::string& what) {
     std::cerr << "[smoke] ts_game FAILED: " << what << '\n';
     return 1;
@@ -184,6 +237,7 @@ int run_smoke(const std::string& dir) {
     const std::string clip0 = a ? a->anim.clip : std::string();
     const int frame0 = a ? a->anim.frame : 0;
     session.run_ticks(1, right);
+    telegraph.drain(world);
     a = world.player(0);
     if (a && !clip0.empty() && a->anim.clip == clip0 && a->anim.frame != frame0) {
       ++frame_changes;
@@ -280,6 +334,7 @@ int run_smoke(const std::string& dir) {
       session.tick() != t + 1) {
     return fail("pause / step");
   }
+  telegraph.drain(world);
   session.stop();
   if (read_file(scene) != disk_before) {
     return fail("scene.json changed (the game must never write it)");
@@ -290,7 +345,9 @@ int run_smoke(const std::string& dir) {
             << (boxes.size() == 1 ? " box" : " boxes") << " ("
             << solid_tiles << " solid tile run" << (solid_tiles == 1 ? "" : "s")
             << "), " << trigger_events << " trigger event"
-            << (trigger_events == 1 ? "" : "s") << ", scene.json untouched)\n";
+            << (trigger_events == 1 ? "" : "s") << ", " << telegraph.lines()
+            << " telegraph line" << (telegraph.lines() == 1 ? "" : "s")
+            << ", scene.json untouched)\n";
   return 0;
 }
 
@@ -328,7 +385,7 @@ void on_glfw_error(int code, const char* message) {
             << (message ? message : "") << '\n';
 }
 
-int run_window(const Options& opt) {
+int run_window(const Options& opt, Telegraph& telegraph) {
   const std::string name = project_name(opt.project);
   glfwSetErrorCallback(on_glfw_error);
   if (!glfwInit()) {
@@ -368,11 +425,13 @@ int run_window(const Options& opt) {
       std::vector<runtime::OverlayBox> boxes;
       double last = glfwGetTime();
       double title_at = last;
+      double scripts_at = last;
       long frames = 0;
       while (!glfwWindowShouldClose(win)) {
         glfwPollEvents();
         if (g.reload) {
           g.reload = false;
+          telegraph.drain(g.session.world());
           renderer.clear();
           if (g.session.start_project(opt.project, &err)) {
             std::cout << "[ts_game] reloaded scene.json\n";
@@ -385,6 +444,13 @@ int run_window(const Options& opt) {
         g.session.update(now - last, poll_input(win));
         last = now;
         renderer.poll_changes(now);
+        // Saved scripts ride back in without a restart (a broken save keeps
+        // the old version running and says why on the Telegraph).
+        if (now - scripts_at >= 0.5) {
+          scripts_at = now;
+          g.session.world().reload_scripts();
+        }
+        telegraph.drain(g.session.world());
 
         int ww = 0, wh = 0, fw = 0, fh = 0;
         glfwGetWindowSize(win, &ww, &wh);
@@ -407,6 +473,7 @@ int run_window(const Options& opt) {
             world.build_overlay(view, alpha, &boxes);
             renderer.render_overlay(boxes);
           }
+          game::render_toasts(game::hud_toasts(world), fw, fh);
           glfwSwapBuffers(win);
         }
         if (now - title_at >= 0.5) {
@@ -435,7 +502,13 @@ int run_window(const Options& opt) {
           break;
         }
       }
-      std::cout << "[ts_game] rode " << g.session.tick() << " ticks. So long.\n";
+      telegraph.drain(g.session.world());
+      std::cout << "[ts_game] rode " << g.session.tick() << " ticks";
+      if (telegraph.errors() > 0) {
+        std::cout << " (" << telegraph.errors() << " script error"
+                  << (telegraph.errors() == 1 ? "" : "s") << " on the Telegraph)";
+      }
+      std::cout << ". So long.\n";
       glfwSetWindowUserPointer(win, nullptr);
     }
     renderer.clear();  // drop GL textures while the context lives
@@ -467,6 +540,12 @@ int main(int argc, char** argv) {
     std::cerr << "No project folder at " << opt.project << '\n';
     return 2;
   }
+  Telegraph telegraph;
+  if (!telegraph.open(opt.log_path, &err)) {
+    std::cerr << err << '\n';
+    return 2;
+  }
   std::cout << "TombStone Game\n";
-  return opt.smoke ? run_smoke(opt.project) : run_window(opt);
+  return opt.smoke ? run_smoke(opt.project, telegraph)
+                   : run_window(opt, telegraph);
 }
