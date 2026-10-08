@@ -54,9 +54,10 @@ void Workspace2D::reset_defaults() {
   player.y = 64.0f;
   player.w = 32.0f;
   player.h = 48.0f;
-  player.color[0] = 0.35f;
-  player.color[1] = 0.75f;
-  player.color[2] = 0.45f;
+  // Untinted: the rider sheet brings its own colours.
+  player.color[0] = 1.0f;
+  player.color[1] = 1.0f;
+  player.color[2] = 1.0f;
   player.color[3] = 1.0f;
   player.layer = 5;
   // Rides on player slot 0 (WASD / arrows / first gamepad) in Play mode.

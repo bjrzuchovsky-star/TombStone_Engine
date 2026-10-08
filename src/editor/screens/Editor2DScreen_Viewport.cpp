@@ -412,24 +412,14 @@ void Editor2DScreen::draw_viewport() {
           }
         }
       }
-    } else if (e.sprite) {
-      if (sprite_state(e) == SpriteState::Ready &&
-          texture(e.sprite->path).handle != 0) {
-        const SpriteData& sp = *e.sprite;
-        const TextureInfo& t = texture(sp.path);
-        ImVec2 uv0(0.0f, 0.0f);
-        ImVec2 uv1(1.0f, 1.0f);
-        if (sp.use_src_rect && t.width > 0 && t.height > 0) {
-          const int sw = sp.src_w > 0 ? sp.src_w : t.width - sp.src_x;
-          const int sh = sp.src_h > 0 ? sp.src_h : t.height - sp.src_y;
-          uv0 = ImVec2(static_cast<float>(sp.src_x) / t.width,
-                       static_cast<float>(sp.src_y) / t.height);
-          uv1 = ImVec2(static_cast<float>(sp.src_x + sw) / t.width,
-                       static_cast<float>(sp.src_y + sh) / t.height);
-        }
-        if (sp.flip_x) std::swap(uv0.x, uv1.x);
-        if (sp.flip_y) std::swap(uv0.y, uv1.y);
-        draw->AddImage(tex_id(t.handle), p0, p1, uv0, uv1, color_u32(e.color));
+    } else if (e.sprite || e.animator) {
+      // Sprites show their source rect; animators their default clip
+      // (running when View > Preview Animations is on).
+      EntityImage img;
+      if (entity_image(e, now_seconds(), &img) && img.texture->handle != 0) {
+        draw->AddImage(tex_id(img.texture->handle), p0, p1,
+                       ImVec2(img.u0, img.v0), ImVec2(img.u1, img.v1),
+                       color_u32(e.color));
       } else {
         draw->AddRectFilled(p0, p1, color_u32(e.color), 1.0f);
         draw_missing_marker(draw, p0, p1);
