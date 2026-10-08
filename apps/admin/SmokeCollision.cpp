@@ -1,5 +1,8 @@
 #include "SmokeCollision.h"
 
+#include "editor/ProjectInfo.h"
+#include "editor/screens/Editor2DScreen.h"
+#include "editor/workspace/SceneIO.h"
 #include "runtime/Collision.h"
 #include "runtime/PlaySession.h"
 #include "runtime/World.h"
@@ -9,8 +12,13 @@
 
 #include <cmath>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <optional>
+#include <sstream>
 #include <string>
+#include <system_error>
 #include <vector>
 
 namespace {
@@ -378,6 +386,161 @@ int check_v4_format() {
   return 0;
 }
 
+std::string read_text(const std::filesystem::path& p) {
+  std::ifstream in(p, std::ios::binary);
+  std::ostringstream ss;
+  ss << in.rdbuf();
+  return ss.str();
+}
+
+int count_kind(const std::vector<runtime::OverlayBox>& boxes,
+               runtime::OverlayKind kind) {
+  int n = 0;
+  for (const runtime::OverlayBox& b : boxes) {
+    n += b.kind == kind ? 1 : 0;
+  }
+  return n;
+}
+
+// The editor side, headless: palette solid toggle and collider edits are
+// single undo steps that land in scene.json; Play rides on the edited
+// solidity; the K overlay and the trigger readout see the same world.
+int check_editor() {
+  namespace fs = std::filesystem;
+  const fs::path dir = fs::path("TombStoneProjects") / "_collision_smoke";
+  std::error_code ec;
+  fs::remove_all(dir, ec);
+  fs::create_directories(dir, ec);
+  editor::ProjectInfo info;
+  info.id = "_collision_smoke";
+  info.name = "Collision Smoke";
+  info.path = dir.string();
+  editor::Editor2DScreen scr(info);
+  scr.on_enter();
+  editor::Workspace2D& w = scr.workspace();
+  const fs::path scene = editor::scene_io::scene_path_for_project(info.path);
+  const Entity2D* player = find_entity_named(w.entities(), "Player");
+  if (!player || !player->collider || !player->collider->dynamic ||
+      read_text(scene).find("\"collider\": {\"x\": 0, \"y\": 0, \"w\": 32, "
+                            "\"h\": 48, \"type\": \"solid\", \"body\": "
+                            "\"dynamic\"}") == std::string::npos ||
+      read_text(scene).find("\"tile_solidity\": []") == std::string::npos) {
+    return fail("seed Player should ride with a default dynamic collider");
+  }
+  const std::uint64_t pid = player->id;
+
+  // Edit-mode overlay: built-in Grass / Dirt are open ground.
+  const runtime::WorldRect all{-4000.0f, -4000.0f, 4000.0f, 4000.0f};
+  std::vector<runtime::OverlayBox> boxes;
+  scr.build_collision_overlay(all, &boxes);
+  if (count_kind(boxes, runtime::OverlayKind::SolidTile) != 0 ||
+      count_kind(boxes, runtime::OverlayKind::DynamicSolid) != 1) {
+    return fail("edit overlay on the seed scene");
+  }
+
+  // Palette toggle: Grass becomes a hedge. One step, autosaved; undo and
+  // redo flip it and scene.json follows.
+  const std::size_t undo0 = w.undo_count();
+  if (scr.tile_solid("", 4) || !scr.toggle_tile_solid("", 4) ||
+      !scr.tile_solid("", 4) || w.undo_count() != undo0 + 1 ||
+      w.undo_label() != "Solid: Grass") {
+    return fail("solid toggle should be one undo step (\"" + w.undo_label() +
+                "\")");
+  }
+  const std::string hedge =
+      "{\"tileset\": \"\", \"solid\": [3, 4, 5, 6, 8, 11, 12, 14, 15]}";
+  if (read_text(scene).find(hedge) == std::string::npos) {
+    return fail("solid toggle should autosave tile_solidity");
+  }
+  scr.build_collision_overlay(all, &boxes);
+  if (count_kind(boxes, runtime::OverlayKind::SolidTile) != 1) {
+    return fail("edit overlay should show the hedge row as one run");
+  }
+  if (!scr.undo() || scr.tile_solid("", 4) ||
+      read_text(scene).find("\"tile_solidity\": []") == std::string::npos) {
+    return fail("undo should make Grass walkable again");
+  }
+  if (!scr.redo() || !scr.tile_solid("", 4) ||
+      read_text(scene).find(hedge) == std::string::npos) {
+    return fail("redo should make Grass solid again");
+  }
+
+  // Collider edits: remove / undo / redo / undo, then a resize.
+  const ColliderData rider_box = *w.find(pid)->collider;
+  if (!scr.set_collider(pid, std::nullopt, "Remove Collider") ||
+      w.find(pid)->collider || !scr.undo() || !w.find(pid)->collider ||
+      *w.find(pid)->collider != rider_box || !scr.redo() ||
+      w.find(pid)->collider || !scr.undo()) {
+    return fail("collider remove should undo / redo");
+  }
+  ColliderData slim = rider_box;
+  slim.offset_x = 4.0f;
+  slim.w = 24.0f;
+  if (!scr.set_collider(pid, slim, "Edit Collider") ||
+      w.undo_label() != "Edit Collider" ||
+      read_text(scene).find("\"collider\": {\"x\": 4, \"y\": 0, \"w\": 24, "
+                            "\"h\": 48") == std::string::npos ||
+      !scr.undo() || *w.find(pid)->collider != rider_box) {
+    return fail("collider edit should be one step in scene.json");
+  }
+
+  // A gate across the rider's path south.
+  const std::uint64_t gid = scr.create_entity("Gate");
+  if (Entity2D* g = w.find(gid)) {
+    g->x = 64.0f;
+    g->y = 120.0f;
+    g->w = 32.0f;
+    g->h = 30.0f;
+  }
+  if (gid == 0 ||
+      !scr.set_collider(gid, ColliderData{0.0f, 0.0f, 32.0f, 30.0f, true, false},
+                        "Add Collider")) {
+    return fail("gate trigger");
+  }
+  const std::string disk_before = read_text(scene);
+
+  // Play: ride south into the hedge. Stops flush on it (bottom at 160),
+  // the gate fires once, edits are locked, the overlay is live.
+  if (!scr.start_play()) {
+    return fail("play with collision");
+  }
+  for (int i = 0; i < 90; ++i) {
+    scr.update_play(1.0 / 60.0, ride(0.0f, 1.0f));
+  }
+  const runtime::Actor* rider = scr.play_session().world().player(0);
+  const std::string trig = scr.last_trigger_text();
+  if (!rider || !near(runtime::collider_box(rider->data).y1, 160.0f, 1.0e-3f) ||
+      trig.rfind("Player rode into Gate (tick ", 0) != 0 ||
+      scr.play_session().world().trigger_event_total() != 1) {
+    return fail("play: rider should stop on the hedge and ride into the gate "
+                "(\"" + trig + "\")");
+  }
+  scr.build_collision_overlay(all, &boxes);
+  bool gate_lit = false;
+  for (const runtime::OverlayBox& b : boxes) {
+    gate_lit |= b.kind == runtime::OverlayKind::Trigger && b.active;
+  }
+  if (!gate_lit || count_kind(boxes, runtime::OverlayKind::SolidTile) != 1) {
+    return fail("play overlay should show the hedge and a lit gate");
+  }
+  if (scr.set_tile_solid("", 1, true) ||
+      scr.set_collider(pid, std::nullopt, "Remove Collider")) {
+    return fail("collision edits must be locked while playing");
+  }
+  scr.stop_play();
+  if (!scr.tile_solid("", 4) || read_text(scene) != disk_before ||
+      !scr.last_trigger_text().empty()) {
+    return fail("stop should leave solidity and scene.json alone");
+  }
+  scr.toggle_collision_overlay();
+  if (!scr.show_collision()) {
+    return fail("K overlay toggle");
+  }
+  scr.on_exit();
+  fs::remove_all(dir, ec);
+  return 0;
+}
+
 }  // namespace
 
 int run_collision_smoke() {
@@ -390,5 +553,12 @@ int run_collision_smoke() {
                "4 px fence, static crate blocks, dynamic crate shoved, "
                "tile_solidity overrides, riders separate, trigger enter/exit "
                "once each, overlay, v3 -> v4 upgrade + roundtrip)\n";
+  if (check_editor() != 0) {
+    return 1;
+  }
+  std::cout << "[smoke] collision editor OK (palette solid toggle = 1 undo "
+               "step + scene.json, undo/redo, collider remove/edit undo/redo, "
+               "Play stops on the edited wall, gate fires once, K overlay "
+               "edit + play, edits locked while riding)\n";
   return 0;
 }

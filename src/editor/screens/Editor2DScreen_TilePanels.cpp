@@ -228,6 +228,8 @@ void Editor2DScreen::draw_tile_palette() {
     } else {
       ImGui::Text("Tile #%d  %s", brush_tile_, builtin_tile(brush_tile_).name);
     }
+    ImGui::SameLine();
+    draw_tile_solid_controls(target);
   }
   theme::Divider();
 
@@ -239,6 +241,9 @@ void Editor2DScreen::draw_tile_palette() {
   const int per_line = std::max(1, static_cast<int>((avail + gap) / (cell + gap)));
   const int lines = (count + per_line - 1) / per_line;
   ImDrawList* dl = ImGui::GetWindowDrawList();
+  // Solidity is kept per tileset ("" = built-in palette).
+  const std::string solid_set =
+      (target && target->tilemap) ? target->tilemap->tileset : std::string();
   ImGuiListClipper clipper;
   clipper.Begin(lines, cell + gap);
   while (clipper.Step()) {
@@ -255,6 +260,8 @@ void Editor2DScreen::draw_tile_palette() {
         const ImVec2 p = ImGui::GetCursorScreenPos();
         const bool clicked = ImGui::InvisibleButton("##tile", ImVec2(cell, cell));
         const bool hot = ImGui::IsItemHovered();
+        const bool rclicked = ImGui::IsItemClicked(ImGuiMouseButton_Right);
+        const bool solid = tile_solid(solid_set, id);
         const ImVec2 q(p.x + cell, p.y + cell);
         dl->AddRectFilled(p, q, theme::U32(theme::Charcoal()));
         draw_tile_swatch(dl, target, id, ImVec2(p.x + 2, p.y + 2),
@@ -266,15 +273,20 @@ void Editor2DScreen::draw_tile_palette() {
         } else {
           dl->AddRect(p, q, theme::U32(theme::Border()));
         }
+        if (solid) {
+          draw_solid_marker(dl, p, q);
+        }
         if (hot) {
           if (from_set) {
             const int per_row = std::max(
                 1, texture(target->tilemap->tileset).width /
                        target->tilemap->tile_size);
-            ImGui::SetTooltip("#%d  (col %d, row %d)", id, (id - 1) % per_row,
-                              (id - 1) / per_row);
+            ImGui::SetTooltip("#%d  (col %d, row %d)%s\nRight-click: toggle solid",
+                              id, (id - 1) % per_row, (id - 1) / per_row,
+                              solid ? "  | solid" : "");
           } else {
-            ImGui::SetTooltip("#%d  %s", id, builtin_tile(id).name);
+            ImGui::SetTooltip("#%d  %s%s\nRight-click: toggle solid", id,
+                              builtin_tile(id).name, solid ? "  | solid" : "");
           }
         }
         if (clicked) {
@@ -283,6 +295,9 @@ void Editor2DScreen::draw_tile_palette() {
               tool_ == TileTool::Eyedropper) {
             set_tool(TileTool::Paint);
           }
+        }
+        if (rclicked) {
+          toggle_tile_solid(solid_set, id);
         }
         ImGui::PopID();
       }
