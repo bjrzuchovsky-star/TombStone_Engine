@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <locale>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -33,6 +34,67 @@ using json_mini::parse_bool;
 using json_mini::parse_string;
 using json_mini::skip_ws;
 using namespace json_flat;
+
+// Shortest text that reads back as the same double (script numbers).
+std::string format_double(double v) {
+  for (int precision = 15; precision <= 17; ++precision) {
+    std::ostringstream ss;
+    ss.imbue(std::locale::classic());
+    ss.precision(precision);
+    ss << v;
+    const std::string text = ss.str();
+    if (std::strtod(text.c_str(), nullptr) == v) {
+      return text;
+    }
+  }
+  std::ostringstream ss;
+  ss.imbue(std::locale::classic());
+  ss.precision(17);
+  ss << v;
+  return ss.str();
+}
+
+// v6 "script": {"path": "...", "props": [{"name": "reach", "number": 24},
+// {"name": "line", "text": "..."}, {"name": "locked", "bool": false}]}.
+// Which value key is present gives the type.
+bool parse_script(const std::string& raw, ScriptData* out) {
+  std::size_t i = 0;
+  FlatMap inner_nested;
+  const auto obj = parse_flat_object(raw, i, &inner_nested);
+  if (!obj) {
+    return false;
+  }
+  out->path = map_string(*obj, "path", "");
+  out->props.clear();
+  const auto props = inner_nested.find("props");
+  if (props == inner_nested.end()) {
+    return true;
+  }
+  std::vector<std::string> items;
+  if (!split_object_array(props->second, &items)) {
+    return false;
+  }
+  for (const std::string& item : items) {
+    std::size_t j = 0;
+    const auto p = parse_flat_object(item, j);
+    if (!p) {
+      return false;
+    }
+    ScriptProp prop;
+    prop.name = map_string(*p, "name", "");
+    if (p->count("bool")) {
+      prop.value = ScriptValue::of_bool(map_bool(*p, "bool", false));
+    } else if (p->count("text")) {
+      prop.value = ScriptValue::of_text(map_string(*p, "text", ""));
+    } else if (p->count("number")) {
+      prop.value = ScriptValue::of_number(map_number(*p, "number", 0.0));
+    } else {
+      return false;
+    }
+    out->props.push_back(std::move(prop));
+  }
+  return true;
+}
 
 Entity2D entity_from_map(const FlatMap& map) {
   Entity2D e;
@@ -91,7 +153,7 @@ bool parse_tile_solidity(std::string_view text, std::size_t& i,
 // v3 "player" {slot, speed}, "camera" {target, smoothing, zoom, use_bounds,
 // bounds_x/y/w/h} and "spawn" {slot}; v4 "collider" {x, y, w, h,
 // type: "solid"|"trigger", body: "static"|"dynamic"}; v5 "animator" {set,
-// clip, default_clip, speed, playing}.
+// clip, default_clip, speed, playing}; v6 "script" {path, props}.
 bool apply_components(Entity2D& e, const FlatMap& nested, std::string* why) {
   auto bad = [&](const char* what) {
     if (why) *why = what;
@@ -189,6 +251,13 @@ bool apply_components(Entity2D& e, const FlatMap& nested, std::string* why) {
     e.animator = std::move(a);
   } else if (nested.count("animator")) {
     return bad("bad animator object");
+  }
+  if (const auto sc = nested.find("script"); sc != nested.end()) {
+    ScriptData data;
+    if (!parse_script(sc->second, &data)) {
+      return bad("bad script object");
+    }
+    e.script = std::move(data);
   }
   normalize_components(e);
   return true;
@@ -313,6 +382,29 @@ void write_entity(std::ostringstream& out, const Entity2D& e) {
         << "\", \"default_clip\": \"" << escape_string(a.default_clip)
         << "\", \"speed\": " << format_float(a.speed)
         << ", \"playing\": " << (a.playing ? "true" : "false") << "}";
+  }
+  if (e.script) {
+    const ScriptData& sc = *e.script;
+    out << ",\n      \"script\": {\"path\": \"" << escape_string(sc.path)
+        << "\", \"props\": [";
+    for (std::size_t k = 0; k < sc.props.size(); ++k) {
+      const ScriptProp& p = sc.props[k];
+      out << (k > 0 ? ", " : "") << "{\"name\": \"" << escape_string(p.name)
+          << "\", ";
+      switch (p.value.type) {
+        case ScriptValue::Type::Bool:
+          out << "\"bool\": " << (p.value.flag ? "true" : "false");
+          break;
+        case ScriptValue::Type::Number:
+          out << "\"number\": " << format_double(p.value.number);
+          break;
+        case ScriptValue::Type::Text:
+          out << "\"text\": \"" << escape_string(p.value.text) << "\"";
+          break;
+      }
+      out << "}";
+    }
+    out << "]}";
   }
   out << "\n";
   out << "    }";
@@ -505,10 +597,11 @@ bool parse(const std::string& text, SceneDoc* doc, std::string* error_out,
 std::string write(const SceneDoc& doc) {
   std::ostringstream out;
   out << "{\n";
-  // v5: optional per-entity "animator"; v4 added "collider" plus the
-  // scene-level tile_solidity table, v3 "player" / "camera" / "spawn" and v2
-  // "tilemap" / "sprite". Older files still load; see parse(). v4 -> v5
-  // needs no upgrade: a scene without animators simply has none.
+  // v6: optional per-entity "script"; v5 added "animator", v4 "collider"
+  // plus the scene-level tile_solidity table, v3 "player" / "camera" /
+  // "spawn" and v2 "tilemap" / "sprite". Older files still load; see
+  // parse(). v4 -> v5 -> v6 need no upgrade: a scene without animators or
+  // scripts simply has none.
   out << "  \"version\": " << kSceneVersion << ",\n";
   out << "  \"pan_x\": " << format_float(doc.pan_x) << ",\n";
   out << "  \"pan_y\": " << format_float(doc.pan_y) << ",\n";

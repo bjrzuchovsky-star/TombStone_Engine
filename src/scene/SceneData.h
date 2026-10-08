@@ -6,6 +6,7 @@
 
 #include "scene/TileMap.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -86,6 +87,55 @@ struct AnimatorData {
   bool operator==(const AnimatorData& o) const = default;
 };
 
+// A value scripts read and write: per-entity script properties (scene.json
+// v6) and the runtime's per-entity key/value state. Only the field that
+// matches `type` is meaningful (the others stay at their defaults).
+struct ScriptValue {
+  enum class Type : std::uint8_t { Bool, Number, Text };
+
+  Type type = Type::Number;
+  bool flag = false;
+  double number = 0.0;
+  std::string text;
+
+  static ScriptValue of_bool(bool v);
+  static ScriptValue of_number(double v);
+  static ScriptValue of_text(std::string v);
+
+  bool operator==(const ScriptValue& o) const = default;
+};
+// "bool" / "number" / "text".
+const char* to_string(ScriptValue::Type type);
+// The value as a short display string ("24", "true", "The gate creaks").
+std::string describe(const ScriptValue& value);
+
+// One named script property override on an entity.
+struct ScriptProp {
+  std::string name;
+  ScriptValue value;
+
+  bool operator==(const ScriptProp& o) const = default;
+};
+
+// Runs a gameplay script (scene.json v6 "script"). The file lives under
+// <project>/scripts/ and declares its properties with defaults; `props`
+// holds this entity's overrides, kept sorted by name.
+struct ScriptData {
+  static constexpr std::size_t kMaxProps = 64;
+  static constexpr std::size_t kMaxTextLength = 1024;
+
+  std::string path;  // project-relative, e.g. "scripts/gate.lua"
+  std::vector<ScriptProp> props;
+
+  const ScriptProp* find(const std::string& name) const;
+  // Add or replace an override (keeps the list sorted).
+  void set(const std::string& name, ScriptValue value);
+  // Drop an override; false when there was none.
+  bool erase(const std::string& name);
+
+  bool operator==(const ScriptData& o) const = default;
+};
+
 // One entity in a flat scene under the conceptual root. Transform is the
 // x/y/w/h rect (y grows down); everything else is an optional component.
 struct Entity2D {
@@ -109,6 +159,8 @@ struct Entity2D {
   std::optional<ColliderData> collider;
   // Sprite animation (scene.json v5).
   std::optional<AnimatorData> animator;
+  // Gameplay script (scene.json v6).
+  std::optional<ScriptData> script;
 
   float center_x() const { return x + w * 0.5f; }
   float center_y() const { return y + h * 0.5f; }
@@ -129,6 +181,9 @@ ColliderData default_collider(const Entity2D& e);
 
 // Clamp component fields to their valid ranges (slots, speed, zoom...).
 void normalize_components(Entity2D& e);
+// Sort props by name, drop blank / duplicate names and non-finite numbers,
+// cap counts and text lengths.
+void normalize_script(ScriptData& s);
 
 // Lookup helpers over a flat entity list.
 const Entity2D* find_entity(const std::vector<Entity2D>& entities,

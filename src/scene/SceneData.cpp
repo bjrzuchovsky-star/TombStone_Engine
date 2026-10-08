@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 #include <numeric>
+#include <sstream>
+#include <utility>
 
 namespace ts {
 namespace tombstone {
@@ -14,7 +16,129 @@ bool operator==(const Entity2D& a, const Entity2D& b) {
          a.color[3] == b.color[3] && a.layer == b.layer &&
          a.tilemap == b.tilemap && a.sprite == b.sprite &&
          a.player == b.player && a.camera == b.camera && a.spawn == b.spawn &&
-         a.collider == b.collider && a.animator == b.animator;
+         a.collider == b.collider && a.animator == b.animator &&
+         a.script == b.script;
+}
+
+ScriptValue ScriptValue::of_bool(bool v) {
+  ScriptValue out;
+  out.type = Type::Bool;
+  out.flag = v;
+  return out;
+}
+
+ScriptValue ScriptValue::of_number(double v) {
+  ScriptValue out;
+  out.type = Type::Number;
+  out.number = v;
+  return out;
+}
+
+ScriptValue ScriptValue::of_text(std::string v) {
+  ScriptValue out;
+  out.type = Type::Text;
+  out.text = std::move(v);
+  return out;
+}
+
+const char* to_string(ScriptValue::Type type) {
+  switch (type) {
+    case ScriptValue::Type::Bool:
+      return "bool";
+    case ScriptValue::Type::Number:
+      return "number";
+    case ScriptValue::Type::Text:
+      return "text";
+  }
+  return "number";
+}
+
+std::string describe(const ScriptValue& value) {
+  switch (value.type) {
+    case ScriptValue::Type::Bool:
+      return value.flag ? "true" : "false";
+    case ScriptValue::Type::Text:
+      return value.text;
+    case ScriptValue::Type::Number:
+      break;
+  }
+  std::ostringstream ss;
+  ss.precision(10);
+  ss << value.number;
+  return ss.str();
+}
+
+const ScriptProp* ScriptData::find(const std::string& name) const {
+  for (const ScriptProp& p : props) {
+    if (p.name == name) {
+      return &p;
+    }
+  }
+  return nullptr;
+}
+
+void ScriptData::set(const std::string& name, ScriptValue value) {
+  for (ScriptProp& p : props) {
+    if (p.name == name) {
+      p.value = std::move(value);
+      return;
+    }
+  }
+  props.push_back(ScriptProp{name, std::move(value)});
+  normalize_script(*this);
+}
+
+bool ScriptData::erase(const std::string& name) {
+  const auto it = std::find_if(props.begin(), props.end(),
+                               [&](const ScriptProp& p) { return p.name == name; });
+  if (it == props.end()) {
+    return false;
+  }
+  props.erase(it);
+  return true;
+}
+
+void normalize_script(ScriptData& s) {
+  std::vector<ScriptProp> clean;
+  clean.reserve(s.props.size());
+  for (ScriptProp& p : s.props) {
+    if (p.name.empty()) {
+      continue;
+    }
+    bool dup = false;
+    for (const ScriptProp& c : clean) {
+      dup = dup || c.name == p.name;
+    }
+    if (dup) {
+      continue;
+    }
+    // Keep only the field the type uses, so equal values compare equal.
+    ScriptValue v;
+    v.type = p.value.type;
+    switch (p.value.type) {
+      case ScriptValue::Type::Bool:
+        v.flag = p.value.flag;
+        break;
+      case ScriptValue::Type::Number:
+        v.number = std::isfinite(p.value.number) ? p.value.number : 0.0;
+        break;
+      case ScriptValue::Type::Text:
+        v.text = std::move(p.value.text);
+        if (v.text.size() > ScriptData::kMaxTextLength) {
+          v.text.resize(ScriptData::kMaxTextLength);
+        }
+        break;
+    }
+    clean.push_back(ScriptProp{std::move(p.name), std::move(v)});
+  }
+  std::stable_sort(clean.begin(), clean.end(),
+                   [](const ScriptProp& a, const ScriptProp& b) {
+                     return a.name < b.name;
+                   });
+  if (clean.size() > ScriptData::kMaxProps) {
+    clean.resize(ScriptData::kMaxProps);
+  }
+  s.props = std::move(clean);
 }
 
 void sync_tilemap_extent(Entity2D& e) {
@@ -79,6 +203,9 @@ void normalize_components(Entity2D& e) {
       an.speed = an.speed < 0.0f ? 0.0f : 1.0f;  // NaN plays at normal speed
     }
     an.speed = std::min(an.speed, AnimatorData::kMaxSpeed);
+  }
+  if (e.script) {
+    normalize_script(*e.script);
   }
 }
 

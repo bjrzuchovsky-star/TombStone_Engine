@@ -17,9 +17,9 @@ namespace scene_json {
 // Format version written by write(). 1 = entities only; 2 = optional
 // "tilemap" / "sprite" objects; 3 = optional "player" / "camera" / "spawn";
 // 4 = optional "collider" plus the scene-level "tile_solidity" table;
-// 5 = optional "animator". Older files still load (see upgrade notes in
-// SceneJson.cpp).
-inline constexpr int kSceneVersion = 5;
+// 5 = optional "animator"; 6 = optional "script". Older files still load
+// (see upgrade notes in SceneJson.cpp).
+inline constexpr int kSceneVersion = 6;
 
 // Whole file: entities plus the editor's view state. The runtime only
 // reads `entities`; the rest round-trips untouched.
