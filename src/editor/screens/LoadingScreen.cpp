@@ -1,5 +1,6 @@
 #include "editor/screens/LoadingScreen.h"
 
+#include "editor/ui/Brand.h"
 #include "editor/ui/Theme.h"
 
 #include <imgui.h>
@@ -30,36 +31,40 @@ AppState LoadingScreen::on_update(float delta_seconds) {
     theme::BeginRoot("##LoadingSplash");
 
     const ImVec2 avail = ImGui::GetContentRegionAvail();
-    ImGui::Dummy(ImVec2(0.0f, avail.y * 0.18f));
-
-    const float card_w = std::min(avail.x * 0.55f, 520.0f);
-    const float card_h = 280.0f;
-    ImGui::SetCursorPosX((avail.x - card_w) * 0.5f);
-    theme::BeginCard("##LoadingCard", card_w, card_h);
+    const float card_w = std::min(avail.x * 0.6f, 540.0f);
+    const float card_h = 330.0f;
+    ImGui::SetCursorPos(ImVec2((avail.x - card_w) * 0.5f,
+                               std::max(12.0f, (avail.y - card_h) * 0.42f)));
+    theme::BeginCard("##LoadingCard", card_w, card_h, ImGuiChildFlags_Borders,
+                     ImGuiWindowFlags_NoScrollbar |
+                         ImGuiWindowFlags_NoScrollWithMouse);
 
     const float inner_w = ImGui::GetContentRegionAvail().x;
-    theme::BrandBlock("TombStone Engine", "Admin Editor", inner_w);
+    ImGui::Dummy(ImVec2(0.0f, 6.0f));
+    theme::BrandHero(brand::kProduct, brand::kTagline, inner_w);
 
-    ImGui::Dummy(ImVec2(0.0f, 18.0f));
-    const float bar_w = std::min(inner_w, 380.0f);
+    ImGui::Dummy(ImVec2(0.0f, 22.0f));
+    const float bar_w = std::min(inner_w, 400.0f);
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (inner_w - bar_w) * 0.5f);
-    ImGui::PushStyleColor(ImGuiCol_PlotHistogram, theme::Accent());
-    ImGui::ProgressBar(progress, ImVec2(bar_w, 10.0f), "");
-    ImGui::PopStyleColor();
+    theme::BrandProgress(progress, ImVec2(bar_w, 8.0f));
 
     ImGui::Dummy(ImVec2(0.0f, 8.0f));
-    char status[64];
-    std::snprintf(status, sizeof(status), "Loading modules... %d%%",
+    char status[96];
+    std::snprintf(status, sizeof(status), "%s...  %d%%",
+                  brand::LoadingLine(progress),
                   static_cast<int>(progress * 100.0f));
-    const ImVec2 st = ImGui::CalcTextSize(status);
-    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (inner_w - st.x) * 0.5f);
-    theme::StatusInfo(status);
+    theme::CenteredText(status, ImGui::GetFontSize(), theme::TextMuted(),
+                        inner_w);
 
-    ImGui::Dummy(ImVec2(0.0f, 10.0f));
-    const char* hint = "Preparing project store and editor shell";
-    const ImVec2 ht = ImGui::CalcTextSize(hint);
-    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (inner_w - ht.x) * 0.5f);
-    ImGui::TextDisabled("%s", hint);
+    // Footer line pinned to the bottom of the card.
+    const char* footer = "ADMIN EDITOR  //  2D FRONTIER TOOLKIT";
+    const float footer_y =
+        ImGui::GetWindowHeight() - ImGui::GetTextLineHeight() - 18.0f;
+    if (ImGui::GetCursorPosY() < footer_y) {
+      ImGui::SetCursorPosY(footer_y);
+    }
+    theme::CenteredText(footer, ImGui::GetFontSize(), theme::CopperMuted(),
+                        inner_w);
 
     theme::EndCard();
     theme::EndRoot();

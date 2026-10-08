@@ -61,29 +61,26 @@ void SettingsScreen::draw_ui() {
   theme::BeginRoot("##SettingsRoot");
 
   const ImVec2 avail = ImGui::GetContentRegionAvail();
-  const float panel_w = std::min(avail.x * 0.7f, 640.0f);
-  const float panel_h = std::min(avail.y * 0.85f, 520.0f);
+  const float panel_w = std::min(avail.x * 0.72f, 660.0f);
+  const float panel_h = std::min(avail.y * 0.9f, 560.0f);
   ImGui::SetCursorPos(ImVec2((avail.x - panel_w) * 0.5f,
                              (avail.y - panel_h) * 0.5f));
   theme::BeginCard("##SettingsCard", panel_w, panel_h);
 
-  theme::SectionHeader("Settings");
-  ImGui::TextDisabled("config: %s",
+  theme::TitleStrip("Settings", "Set your camp");
+  ImGui::TextDisabled("Ledger file: %s",
                       SettingsStore::default_settings_path().c_str());
-  ImGui::Spacing();
 
-  theme::SectionHeader("Projects");
-  ImGui::TextUnformatted("Projects root folder");
+  theme::SectionHeader("Territory", "where projects live");
   ImGui::SetNextItemWidth(-110.0f);
-  ImGui::InputText("##projects_root", projects_root_buf_,
-                   sizeof(projects_root_buf_));
+  ImGui::InputTextWithHint("##projects_root", "./TombStoneProjects",
+                           projects_root_buf_, sizeof(projects_root_buf_));
   ImGui::SameLine();
   if (theme::SecondaryButton("Browse...", ImVec2(100, 0))) {
     validation_error_.clear();
     folder_browser_.open(projects_root_buf_);
   }
-  theme::StatusInfo(
-      "Browse opens an in-app folder picker (works on all platforms).");
+  theme::StatusInfo("Browse opens the in-app folder picker. Same on every OS.");
 
   if (folder_browser_.draw("Select projects_root folder")) {
     const std::string picked = folder_browser_.take_result();
@@ -93,24 +90,23 @@ void SettingsScreen::draw_ui() {
     }
   }
 
-  theme::SectionHeader("Account");
-  ImGui::TextUnformatted("Default username");
+  theme::SectionHeader("Rider", "account");
   ImGui::SetNextItemWidth(-1);
-  ImGui::InputText("##username", username_buf_, sizeof(username_buf_));
-  ImGui::Checkbox("Auto Dev login on startup", &draft_.auto_login_dev);
-  theme::StatusInfo(
-      "When enabled, Login skips credentials and signs in as the saved user.");
+  ImGui::InputTextWithHint("##username", "Default rider name", username_buf_,
+                           sizeof(username_buf_));
+  ImGui::Checkbox("Ride in on Dev login at startup", &draft_.auto_login_dev);
+  theme::StatusInfo("Skips the gate and signs in as the saved rider.");
 
-  theme::SectionHeader("Appearance");
-  const char* themes[] = {"Dark (professional)", "Light"};
+  theme::SectionHeader("Lamplight", "appearance");
+  const char* themes[] = {"Dusk  (charcoal + amber)",
+                          "Parchment  (warm light)"};
   ImGui::SetNextItemWidth(280.0f);
   ImGui::Combo("##theme", &theme_index_, themes, 2);
   ImGui::SameLine();
   ImGui::TextDisabled("Theme");
 
   if (!draft_.last_project_path.empty()) {
-    ImGui::Spacing();
-    theme::SectionHeader("Session");
+    theme::SectionHeader("Trail", "last session");
     ImGui::TextDisabled("Last project: %s", draft_.last_project_path.c_str());
   }
 
@@ -119,8 +115,9 @@ void SettingsScreen::draw_ui() {
     theme::StatusError(validation_error_.c_str());
   }
 
-  ImGui::Dummy(ImVec2(0, 16.0f));
-  if (theme::PrimaryButton("Apply / Save", ImVec2(160, 34.0f))) {
+  ImGui::Dummy(ImVec2(0, 10.0f));
+  theme::Divider();
+  if (theme::PrimaryButton("Save & Apply", ImVec2(160, 34.0f))) {
     request_apply();
   }
   ImGui::SameLine();
@@ -171,7 +168,7 @@ void SettingsScreen::request_apply() {
 
   if (draft_.projects_root.empty()) {
     validation_error_ =
-        "projects_root must be non-empty (example: ./TombStoneProjects).";
+        "Territory can't be blank. Try ./TombStoneProjects.";
     apply_requested_ = false;
     return;
   }

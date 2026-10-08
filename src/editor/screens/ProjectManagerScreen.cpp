@@ -52,23 +52,57 @@ void ProjectManagerScreen::draw_project_card(std::size_t i) {
       highlighted_index_.has_value() && *highlighted_index_ == i;
 
   ImGui::PushID(static_cast<int>(i));
-  ImGui::PushStyleColor(ImGuiCol_ChildBg,
-                        highlight ? ImVec4(0.16f, 0.24f, 0.38f, 1.0f)
-                                  : theme::PanelBg());
-  ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 8.0f);
-  ImGui::BeginChild("card", ImVec2(0, 78), ImGuiChildFlags_Borders);
+  const ImVec4 base = theme::PanelBg();
+  const ImVec4 lit = theme::Accent();
+  ImGui::PushStyleColor(
+      ImGuiCol_ChildBg,
+      highlight ? ImVec4(base.x + (lit.x - base.x) * 0.14f,
+                         base.y + (lit.y - base.y) * 0.14f,
+                         base.z + (lit.z - base.z) * 0.14f, 1.0f)
+                : base);
+  ImGui::PushStyleColor(ImGuiCol_Border,
+                        highlight ? theme::AccentMuted() : theme::Border());
+  ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, theme::metrics::kRadiusCard);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16.0f, 9.0f));
+  ImGui::BeginChild("card", ImVec2(0, 80), ImGuiChildFlags_Borders,
+                    ImGuiWindowFlags_NoScrollbar);
+
+  // Left rail: amber when picked, stone otherwise.
+  {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 wp = ImGui::GetWindowPos();
+    const float h = ImGui::GetWindowSize().y;
+    dl->AddRectFilled(wp, ImVec2(wp.x + 4.0f, wp.y + h),
+                      theme::U32(highlight ? theme::Accent() : theme::Border()),
+                      theme::metrics::kRadiusCard, ImDrawFlags_RoundCornersLeft);
+  }
 
   ImGui::BeginGroup();
+  ImGui::PushStyleColor(ImGuiCol_Text,
+                        highlight ? theme::Accent() : theme::Text());
   ImGui::TextUnformatted(p.name.c_str());
+  ImGui::PopStyleColor();
   ImGui::SameLine();
   theme::DimensionBadge(to_string(p.kind));
   ImGui::TextDisabled("%s", p.path.c_str());
   if (!p.last_opened.empty()) {
-    ImGui::TextDisabled("Last opened: %s", p.last_opened.c_str());
+    ImGui::TextDisabled("Last worked  %s", p.last_opened.c_str());
   } else if (!p.created.empty()) {
-    ImGui::TextDisabled("Created: %s", p.created.c_str());
+    ImGui::TextDisabled("Staked  %s", p.created.c_str());
   }
   ImGui::EndGroup();
+
+  if (highlight) {
+    const char* hint = p.kind == ProjectKind::ThreeD
+                           ? "3D: not open for business yet"
+                           : "Double-click or Open to ride in";
+    const ImVec2 hs = ImGui::CalcTextSize(hint);
+    ImGui::SetCursorPos(ImVec2(ImGui::GetWindowWidth() - hs.x - 16.0f,
+                               ImGui::GetWindowHeight() - hs.y - 9.0f));
+    ImGui::PushStyleColor(ImGuiCol_Text, theme::CopperMuted());
+    ImGui::TextUnformatted(hint);
+    ImGui::PopStyleColor();
+  }
 
   if (ImGui::IsWindowHovered() &&
       ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
@@ -81,18 +115,21 @@ void ProjectManagerScreen::draw_project_card(std::size_t i) {
   }
 
   ImGui::EndChild();
-  ImGui::PopStyleVar();
-  ImGui::PopStyleColor();
+  ImGui::PopStyleVar(2);
+  ImGui::PopStyleColor(2);
   ImGui::PopID();
-  ImGui::Dummy(ImVec2(0, 4.0f));
+  ImGui::Dummy(ImVec2(0, 2.0f));
 }
 
 void ProjectManagerScreen::draw_ui() {
   theme::BeginRoot("##ProjectManagerRoot");
 
-  theme::SectionHeader("Project Manager");
-  ImGui::TextDisabled("projects_root: %s", projects_root_.c_str());
-  ImGui::Spacing();
+  theme::TitleStrip("Project Manager", "Your claims on the frontier");
+
+  char caption[64];
+  std::snprintf(caption, sizeof(caption), "%zu on file", projects_.size());
+  theme::SectionHeader("Claims", caption);
+  ImGui::TextDisabled("Territory: %s", projects_root_.c_str());
 
   if (!status_message_.empty()) {
     theme::StatusSuccess(status_message_.c_str());
@@ -100,30 +137,39 @@ void ProjectManagerScreen::draw_ui() {
   if (!error_message_.empty()) {
     theme::StatusError(error_message_.c_str());
   }
+  ImGui::Spacing();
 
-  ImGui::BeginChild("ProjectList", ImVec2(0, -120), ImGuiChildFlags_Borders);
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
+  ImGui::BeginChild("ProjectList", ImVec2(0, -96), ImGuiChildFlags_None);
   if (projects_.empty()) {
-    ImGui::Dummy(ImVec2(0, 40));
-    const char* empty = "No projects yet";
-    const ImVec2 es = ImGui::CalcTextSize(empty);
-    ImGui::SetCursorPosX((ImGui::GetContentRegionAvail().x - es.x) * 0.5f);
-    ImGui::TextUnformatted(empty);
-    theme::StatusInfo(
-        "Create a New 2D project below to get started. A sample project is "
-        "seeded automatically when the projects folder is empty.");
+    const float w = ImGui::GetContentRegionAvail().x;
+    ImGui::Dummy(ImVec2(0, 36));
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 c = ImGui::GetCursorScreenPos();
+    theme::TombstoneMark(dl, ImVec2(c.x + w * 0.5f, c.y), 56.0f,
+                         theme::U32(theme::Border()),
+                         theme::U32(theme::Charcoal(), 0.7f));
+    ImGui::Dummy(ImVec2(w, 68.0f));
+    theme::CenteredText("Nothing staked yet.", 22.0f, theme::Text(), w);
+    ImGui::Dummy(ImVec2(0, 4));
+    theme::CenteredText("Name a 2D project below and break ground.",
+                        ImGui::GetFontSize(), theme::TextMuted(), w);
+    theme::CenteredText("An empty territory gets a sample claim on next load.",
+                        ImGui::GetFontSize(), theme::TextMuted(), w);
   } else {
     for (std::size_t i = 0; i < projects_.size(); ++i) {
       draw_project_card(i);
     }
   }
   ImGui::EndChild();
+  ImGui::PopStyleColor();
 
-  ImGui::Separator();
-  ImGui::SetNextItemWidth(280.0f);
-  ImGui::InputTextWithHint("##newname", "New 2D project name", new_name_buf_,
+  theme::SectionHeader("Break Ground", "new 2D project");
+  ImGui::SetNextItemWidth(260.0f);
+  ImGui::InputTextWithHint("##newname", "Name your claim", new_name_buf_,
                            sizeof(new_name_buf_));
   ImGui::SameLine();
-  if (theme::PrimaryButton("New 2D", ImVec2(100, 0))) {
+  if (theme::PrimaryButton("+ New 2D", ImVec2(96, 0))) {
     std::string validate_err;
     if (!ProjectStore::validate_project_name(new_name_buf_, &validate_err)) {
       error_message_ = validate_err;
@@ -134,51 +180,51 @@ void ProjectManagerScreen::draw_ui() {
     }
   }
   ImGui::SameLine();
-  if (theme::SecondaryButton("Open", ImVec2(90, 0))) {
+  if (theme::CopperButton("Open", ImVec2(80, 0))) {
     if (!highlighted_index_.has_value()) {
-      error_message_ = "Select a project in the list before Open.";
+      error_message_ = "Pick a claim first, then Open.";
     } else {
       select_project(*highlighted_index_);
     }
   }
   ImGui::SameLine();
-  if (theme::DangerButton("Delete", ImVec2(90, 0))) {
+  if (theme::DangerButton("Delete", ImVec2(80, 0))) {
     if (!highlighted_index_.has_value()) {
-      error_message_ = "Select a project before Delete.";
+      error_message_ = "Pick a claim first, then Delete.";
     } else {
       confirm_delete_open_ = true;
-      ImGui::OpenPopup("Confirm Delete");
+      ImGui::OpenPopup("Bury Project?");
     }
   }
-  ImGui::SameLine();
-  if (theme::SecondaryButton("Settings", ImVec2(100, 0))) {
+  ImGui::SameLine(0.0f, 24.0f);
+  if (theme::SecondaryButton("Settings", ImVec2(90, 0))) {
     request_settings();
   }
   ImGui::SameLine();
-  if (theme::SecondaryButton("Logout", ImVec2(90, 0))) {
+  if (theme::SecondaryButton("Log Out", ImVec2(80, 0))) {
     request_logout();
   }
 
   if (confirm_delete_open_) {
-    ImGui::OpenPopup("Confirm Delete");
+    ImGui::OpenPopup("Bury Project?");
   }
-  if (ImGui::BeginPopupModal("Confirm Delete", nullptr,
+  if (ImGui::BeginPopupModal("Bury Project?", nullptr,
                              ImGuiWindowFlags_AlwaysAutoResize)) {
     const char* name = "(none)";
     if (highlighted_index_.has_value() &&
         *highlighted_index_ < projects_.size()) {
       name = projects_[*highlighted_index_].name.c_str();
     }
-    ImGui::Text("Delete project \"%s\" from disk?", name);
-    ImGui::TextDisabled("This removes the project folder permanently.");
+    ImGui::Text("Bury \"%s\" for good?", name);
+    theme::StatusWarn("This deletes the project folder from disk. No coming back.");
     ImGui::Spacing();
-    if (theme::DangerButton("Delete", ImVec2(120, 0))) {
+    if (theme::DangerButton("Bury It", ImVec2(120, 0))) {
       request_delete_highlighted();
       confirm_delete_open_ = false;
       ImGui::CloseCurrentPopup();
     }
     ImGui::SameLine();
-    if (theme::SecondaryButton("Cancel", ImVec2(120, 0))) {
+    if (theme::SecondaryButton("Keep It", ImVec2(120, 0))) {
       confirm_delete_open_ = false;
       ImGui::CloseCurrentPopup();
     }
@@ -227,8 +273,8 @@ bool ProjectManagerScreen::select_project(std::size_t index) {
   const ProjectInfo& project = projects_[index];
   if (project.kind == ProjectKind::ThreeD) {
     error_message_ = "Cannot open \"" + project.name +
-                     "\": 3D projects are not implemented yet. "
-                     "Choose a 2D project.";
+                     "\": 3D isn't open for business yet. "
+                     "Pick a 2D claim.";
     status_message_.clear();
     std::cout << "[ProjectManager] " << error_message_ << '\n';
     return false;

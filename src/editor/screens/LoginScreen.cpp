@@ -1,9 +1,11 @@
 #include "editor/screens/LoginScreen.h"
 
+#include "editor/ui/Brand.h"
 #include "editor/ui/Theme.h"
 
 #include <imgui.h>
 
+#include <algorithm>
 #include <cstring>
 #include <iostream>
 
@@ -40,19 +42,19 @@ void LoginScreen::draw_ui() {
   theme::BeginRoot("##LoginRoot");
 
   const ImVec2 avail = ImGui::GetContentRegionAvail();
-  const float panel_w = 460.0f;
-  const float panel_h = 360.0f;
-  ImGui::SetCursorPos(ImVec2((avail.x - panel_w) * 0.5f,
-                             (avail.y - panel_h) * 0.5f));
+  const float panel_w = 440.0f;
+  const float panel_h = 420.0f;
+  ImGui::SetCursorPos(ImVec2(std::max(0.0f, (avail.x - panel_w) * 0.5f),
+                             std::max(0.0f, (avail.y - panel_h) * 0.5f)));
   theme::BeginCard("LoginPanel", panel_w, panel_h);
 
   const float inner_w = ImGui::GetContentRegionAvail().x;
-  theme::BrandBlock("TombStone Admin", "Sign in to continue", inner_w);
-  ImGui::Dummy(ImVec2(0, 8.0f));
-  theme::SectionHeader("Credentials");
+  theme::BrandBlock(brand::kAdminTitle, "Sign the ledger. Ride in.", inner_w);
+  ImGui::Dummy(ImVec2(0, 6.0f));
+  theme::SectionHeader("Credentials", "who goes there");
 
   ImGui::SetNextItemWidth(-1);
-  ImGui::InputTextWithHint("##user", "Username", username_buf_,
+  ImGui::InputTextWithHint("##user", "Rider name", username_buf_,
                            sizeof(username_buf_));
   ImGui::SetNextItemWidth(-1);
   ImGui::InputTextWithHint("##pass", "Password", password_buf_,
@@ -69,23 +71,26 @@ void LoginScreen::draw_ui() {
     theme::StatusError(error_message_.c_str());
   }
 
-  ImGui::Dummy(ImVec2(0, 10.0f));
-  const float btn_w = (inner_w - 16.0f) / 3.0f;
-  if (theme::PrimaryButton("Login", ImVec2(btn_w, 34.0f))) {
+  ImGui::Dummy(ImVec2(0, 8.0f));
+  if (theme::PrimaryButton("Ride In", ImVec2(-1, 34.0f))) {
     try_login(username_buf_, password_buf_);
   }
-  ImGui::SameLine();
-  if (theme::SecondaryButton("Dev login", ImVec2(btn_w, 34.0f))) {
+  const float half_w = (inner_w - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
+  if (theme::CopperButton("Dev Login", ImVec2(half_w, 30.0f))) {
     submit_dev_login();
   }
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("Skip the gate for local work (signs in as the saved user).");
+  }
   ImGui::SameLine();
-  if (theme::SecondaryButton("Settings", ImVec2(btn_w, 34.0f))) {
+  if (theme::SecondaryButton("Settings", ImVec2(half_w, 30.0f))) {
     request_settings();
   }
 
-  ImGui::Dummy(ImVec2(0, 12.0f));
+  ImGui::Dummy(ImVec2(0, 8.0f));
   theme::StatusInfo(
-      "Stub auth: any non-empty user/pass, or use Dev login for local work.");
+      "Stub auth for now: any name and password gets through. "
+      "Dev Login skips the line.");
 
   theme::EndCard();
   theme::EndRoot();
@@ -114,7 +119,7 @@ AppState LoginScreen::on_update(float /*delta_seconds*/) {
 bool LoginScreen::try_login(const std::string& username,
                             const std::string& password) {
   if (username.empty() || password.empty()) {
-    error_message_ = "Username and password must both be non-empty.";
+    error_message_ = "Need a name and a password. Both.";
     std::cout << "[Login] rejected: " << error_message_ << '\n';
     return false;
   }
