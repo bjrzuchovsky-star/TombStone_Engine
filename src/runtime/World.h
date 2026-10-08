@@ -7,13 +7,18 @@
 
 #include "runtime/Collision.h"
 #include "runtime/Input.h"
+#include "runtime/Log.h"
+#include "runtime/Script.h"
 #include "scene/Animation.h"
 #include "scene/SceneData.h"
 #include "scene/TileMap.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <map>
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
@@ -58,6 +63,12 @@ struct Actor {
   float in_x = 0.0f;    // move intent of the latest tick (-1..1)
   float in_y = 0.0f;
   AnimState anim;
+  // Script-driven state (World_Script.cpp).
+  bool hidden = false;   // hide(): skipped by the draw list
+  bool dead = false;     // destroy(): removed after the script phase
+  bool spawned = false;  // made by spawn() / duplicate() during the ride
+  std::optional<ColliderData> stashed;  // set_collider(false) parks it here
+  std::map<std::string, ScriptValue> state;  // e:get / e:set
 };
 
 // What the camera shows: world point at the view centre plus scale
@@ -92,8 +103,9 @@ struct DrawQuad {
   std::uint64_t entity = 0;
 };
 
-// Something walked into or out of a trigger collider. Recorded per tick
-// for the scripting step to hook; nothing reacts to it yet.
+// Something walked into or out of a trigger collider. Recorded per tick;
+// the trigger's script hears it (on_trigger_enter / on_trigger_exit) and
+// Telegraph logs it.
 struct TriggerEvent {
   enum class Kind { Enter, Exit };
   Kind kind = Kind::Enter;
@@ -114,8 +126,22 @@ using ImageSizeFn =
 std::string resolve_asset(const std::string& project_dir,
                           const std::string& rel_path);
 
-class World {
+// A short HUD message from a script ("Picked up 10 gold").
+struct Toast {
+  int slot = -1;             // rider slot it shows for (-1 = everyone)
+  std::string text;
+  std::uint64_t until = 0;   // last tick it shows on
+  std::uint64_t entity = 0;  // whose script sent it
+};
+
+class World final : public ScriptWorld {
  public:
+  World() = default;
+  ~World() override;
+  // The script host keeps a reference to its world: no copies, no moves.
+  World(const World&) = delete;
+  World& operator=(const World&) = delete;
+
   // Build from authored entities (copied). Each PlayerController whose
   // slot has a SpawnPoint starts centred on it. project_dir anchors the
   // project-relative image paths. False (with a reason) for an empty scene.
@@ -197,9 +223,61 @@ class World {
                                bool walking, const std::string& fallback,
                                bool* flip_x);
 
+  // --- Scripts (World_Script.cpp) -----------------------------------------------
+  // Entities with a script component run it inside step(), after riders
+  // move and triggers resolve: on_start (first tick), trigger hooks,
+  // on_interact (action button pressed within kInteractReach px), timers,
+  // then on_tick. Spawns join at once (on_start next tick); destroys land
+  // at the end of the script phase.
+  static constexpr float kInteractReach = 24.0f;
+  static constexpr std::size_t kMaxActors = 10000;
+  static constexpr std::size_t kMaxPendingLogs = 4096;
+  // Sources outlive build() like anim_library(); tests put() into it.
+  ScriptLibrary& script_library() { return script_lib_; }
+  ScriptHost* scripts() { return scripts_.get(); }
+  // Re-run script files changed on disk (Play hot reload). Files reloaded.
+  int reload_scripts();
+  // Telegraph lines since the last take (scripts, toasts, trigger events).
+  std::vector<LogEntry> take_logs();
+  const std::vector<LogEntry>& pending_logs() const { return logs_; }
+  std::uint64_t log_total() const { return log_total_; }
+  const std::vector<Toast>& toasts() const { return toasts_; }
+  // Toasts on one rider's HUD now: its own plus everyone's, oldest first.
+  std::vector<const Toast*> toasts_for(int slot) const;
+  // What the rider's action button would poke: the nearest scripted entity
+  // with on_interact within kInteractReach px of its collider (0 = none).
+  std::uint64_t interact_target(std::uint64_t rider);
+
+  // ScriptWorld: what scripts reach (see Script.h).
+  std::uint64_t script_tick() const override;
+  const Entity2D* script_entity(std::uint64_t id) const override;
+  std::uint64_t script_find(const std::string& name) const override;
+  std::uint64_t script_player(int slot) const override;
+  void script_move(std::uint64_t id, float x, float y) override;
+  bool script_visible(std::uint64_t id) const override;
+  void script_set_visible(std::uint64_t id, bool on) override;
+  bool script_collider_on(std::uint64_t id) const override;
+  void script_set_collider(std::uint64_t id, bool on) override;
+  bool script_play(std::uint64_t id, const std::string& clip,
+                   bool hold) override;
+  void script_release(std::uint64_t id) override;
+  std::uint64_t script_spawn(const std::string& tmpl, float x,
+                             float y) override;
+  std::uint64_t script_duplicate(std::uint64_t id, float x, float y) override;
+  void script_destroy(std::uint64_t id) override;
+  bool script_spawned(std::uint64_t id) const override;
+  const ScriptValue* script_get(std::uint64_t id,
+                                const std::string& key) const override;
+  void script_set(std::uint64_t id, const std::string& key,
+                  const ScriptValue* value) override;
+  void script_toast(int slot, const std::string& text, double seconds,
+                    std::uint64_t from) override;
+  void script_log(LogEntry entry) override;
+
   // Quads for everything visible in `view`, back to front. Cameras and
-  // spawn points are editor markers and do not draw. Animators draw the
-  // current frame of their sheet in place of the sprite image.
+  // spawn points are editor markers and do not draw, nor do hidden
+  // entities. Animators draw the current frame of their sheet in place of
+  // the sprite image.
   void build_draw_list(const WorldRect& view, float alpha,
                        const ImageSizeFn& image_size,
                        std::vector<DrawQuad>* out) const;
@@ -232,6 +310,17 @@ class World {
   void step_players(const InputFrame& input);
   void step_camera();
   void setup_animation();
+  void setup_actor_animation(Actor& a);
+  void setup_scripts();
+  void step_scripts(const InputFrame& input);
+  // Drop destroyed actors, re-index collision + draw order after spawns,
+  // destroys and collider toggles.
+  void apply_changes();
+  std::uint64_t add_actor(Entity2D data);
+  Actor* live(std::uint64_t id);
+  const Actor* live(std::uint64_t id) const;
+  void post(LogLevel level, const std::string& channel, std::string text,
+            std::uint64_t entity);
   void step_animation();
   // Switch an actor's clip; time carries over between directions of one
   // move (walk_left -> walk_up) and resets otherwise.
@@ -266,6 +355,19 @@ class World {
   std::vector<AnimLibrary::Entry> anim_sets_;
   std::vector<std::string> anim_paths_;
   AnimLibrary anim_lib_;
+
+  // Scripts. The library is declared first so the host (which reads it)
+  // goes first on teardown.
+  ScriptLibrary script_lib_;
+  std::unique_ptr<ScriptHost> scripts_;
+  std::vector<Entity2D> authored_;  // spawn() templates, as built
+  std::vector<LogEntry> logs_;
+  std::uint64_t log_total_ = 0;
+  std::vector<Toast> toasts_;
+  std::uint64_t next_id_ = 1;
+  std::array<std::uint32_t, kMaxPlayers> prev_buttons_{};
+  bool in_step_ = false;  // script_tick() = the tick being simulated
+  bool dirty_ = false;    // apply_changes() has work
 };
 
 }  // namespace runtime

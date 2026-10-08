@@ -73,6 +73,7 @@ bool World::build(const std::vector<Entity2D>& entities,
   setup_collision();
   setup_animation();
   setup_camera();
+  setup_scripts();
   return true;
 }
 
@@ -87,6 +88,14 @@ bool World::load_project(const std::string& project_dir,
 }
 
 void World::clear() {
+  scripts_.reset();
+  authored_.clear();
+  logs_.clear();
+  toasts_.clear();
+  next_id_ = 1;
+  prev_buttons_ = {};
+  in_step_ = false;
+  dirty_ = false;
   actors_.clear();
   draw_order_.clear();
   cam_ = CameraRig{};
@@ -318,13 +327,27 @@ void World::step(const InputFrame& input) {
     return;
   }
   events_.clear();
+  in_step_ = true;
+  // Scripts that joined since the last tick start before anybody moves.
+  if (scripts_) {
+    scripts_->start_pending();
+  }
+  apply_changes();
   step_players(input);
   separate_dynamics();
   update_triggers();
+  for (const TriggerEvent& ev : events_) {
+    post(LogLevel::Info, "trigger", describe(ev), ev.trigger);
+  }
+  step_scripts(input);
   step_animation();
-  // Later: scripts hooked on trigger_events().
   step_camera();
+  in_step_ = false;
   ++tick_;
+  // A toast shows through its `until` tick.
+  toasts_.erase(std::remove_if(toasts_.begin(), toasts_.end(),
+                               [&](const Toast& t) { return t.until < tick_; }),
+                toasts_.end());
 }
 
 // --- Draw list ------------------------------------------------------------------
@@ -359,7 +382,8 @@ void World::build_draw_list(const WorldRect& view, float alpha,
   for (std::size_t idx : draw_order_) {
     const Actor& a = actors_[idx];
     const Entity2D& e = a.data;
-    if (e.camera || e.spawn || e.w <= 0.0f || e.h <= 0.0f) {
+    if (e.camera || e.spawn || a.hidden || a.dead || e.w <= 0.0f ||
+        e.h <= 0.0f) {
       continue;
     }
     const float x = a.prev_x + (e.x - a.prev_x) * alpha;

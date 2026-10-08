@@ -148,38 +148,42 @@ void World::setup_animation() {
   anim_sets_.clear();
   anim_paths_.clear();
   for (Actor& a : actors_) {
-    a.anim = AnimState{};
-    if (!a.data.animator || a.data.animator->set.empty()) {
-      continue;
-    }
-    const std::string& rel = a.data.animator->set;
-    const auto it = std::find(anim_paths_.begin(), anim_paths_.end(), rel);
-    if (it != anim_paths_.end()) {
-      a.anim.set = static_cast<int>(it - anim_paths_.begin());
-    } else {
-      const AnimLibrary::Entry* e = anim_lib_.get(project_dir_, rel);
-      anim_sets_.push_back(e ? *e : AnimLibrary::Entry{});
-      anim_paths_.push_back(rel);
-      a.anim.set = static_cast<int>(anim_sets_.size() - 1);
-    }
-    const AnimLibrary::Entry& entry = anim_sets_[static_cast<std::size_t>(a.anim.set)];
-    if (!entry.ok) {
-      continue;
-    }
-    const AnimatorData& an = *a.data.animator;
-    // The ride starts on the authored clip, else the default.
-    std::string start = an.clip;
-    if (!entry.set.find(start)) {
-      start = entry.set.find(an.default_clip) ? an.default_clip
-                                              : entry.set.start_clip();
-    }
-    a.anim.clip = start;
-    Facing f = Facing::Down;
-    if (facing_of(start, &f)) {
-      a.dir = f;
-      if (f == Facing::Left) a.facing = -1;
-      if (f == Facing::Right) a.facing = 1;
-    }
+    setup_actor_animation(a);
+  }
+}
+
+void World::setup_actor_animation(Actor& a) {
+  a.anim = AnimState{};
+  if (!a.data.animator || a.data.animator->set.empty()) {
+    return;
+  }
+  const std::string& rel = a.data.animator->set;
+  const auto it = std::find(anim_paths_.begin(), anim_paths_.end(), rel);
+  if (it != anim_paths_.end()) {
+    a.anim.set = static_cast<int>(it - anim_paths_.begin());
+  } else {
+    const AnimLibrary::Entry* e = anim_lib_.get(project_dir_, rel);
+    anim_sets_.push_back(e ? *e : AnimLibrary::Entry{});
+    anim_paths_.push_back(rel);
+    a.anim.set = static_cast<int>(anim_sets_.size() - 1);
+  }
+  const AnimLibrary::Entry& entry = anim_sets_[static_cast<std::size_t>(a.anim.set)];
+  if (!entry.ok) {
+    return;
+  }
+  const AnimatorData& an = *a.data.animator;
+  // The ride starts on the authored clip, else the default.
+  std::string start = an.clip;
+  if (!entry.set.find(start)) {
+    start = entry.set.find(an.default_clip) ? an.default_clip
+                                            : entry.set.start_clip();
+  }
+  a.anim.clip = start;
+  Facing f = Facing::Down;
+  if (facing_of(start, &f)) {
+    a.dir = f;
+    if (f == Facing::Left) a.facing = -1;
+    if (f == Facing::Right) a.facing = 1;
   }
 }
 
