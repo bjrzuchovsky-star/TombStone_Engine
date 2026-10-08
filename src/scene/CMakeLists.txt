@@ -2,6 +2,7 @@
 # their components, tile codec, scene.json reader/writer. Pure C++ (no UI,
 # no graphics API), so headless tools and servers can link it too.
 add_library(ts_scene
+  JsonFlat.cpp
   Scene.cpp
   SceneData.cpp
   SceneJson.cpp

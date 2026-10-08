@@ -14,7 +14,7 @@ bool operator==(const Entity2D& a, const Entity2D& b) {
          a.color[3] == b.color[3] && a.layer == b.layer &&
          a.tilemap == b.tilemap && a.sprite == b.sprite &&
          a.player == b.player && a.camera == b.camera && a.spawn == b.spawn &&
-         a.collider == b.collider;
+         a.collider == b.collider && a.animator == b.animator;
 }
 
 void sync_tilemap_extent(Entity2D& e) {
@@ -72,6 +72,13 @@ void normalize_components(Entity2D& e) {
                      ColliderData::kMinSize, ColliderData::kMaxSize);
     c.h = std::clamp(finite_or(c.h, ColliderData::kMinSize),
                      ColliderData::kMinSize, ColliderData::kMaxSize);
+  }
+  if (e.animator) {
+    AnimatorData& an = *e.animator;
+    if (!(an.speed >= 0.0f)) {
+      an.speed = an.speed < 0.0f ? 0.0f : 1.0f;  // NaN plays at normal speed
+    }
+    an.speed = std::min(an.speed, AnimatorData::kMaxSpeed);
   }
 }
 

@@ -70,6 +70,22 @@ struct ColliderData {
   bool operator==(const ColliderData& o) const = default;
 };
 
+// Plays clips from an animation set (scene.json v5 "animator"). The set
+// is a project-relative .anim.json next to a sprite sheet (see
+// scene/Animation.h); several entities can share one. Players pick their
+// clips from movement at runtime (idle / walk + _down/_up/_left/_right).
+struct AnimatorData {
+  static constexpr float kMaxSpeed = 16.0f;
+
+  std::string set;           // project-relative, e.g. "assets/rider.anim.json"
+  std::string clip;          // current clip; the ride starts on it ("" = default)
+  std::string default_clip;  // start / fallback clip ("" = the set's default)
+  float speed = 1.0f;        // playback rate, 0..kMaxSpeed
+  bool playing = true;       // false holds the current frame
+
+  bool operator==(const AnimatorData& o) const = default;
+};
+
 // One entity in a flat scene under the conceptual root. Transform is the
 // x/y/w/h rect (y grows down); everything else is an optional component.
 struct Entity2D {
@@ -91,6 +107,8 @@ struct Entity2D {
   std::optional<SpawnPointData> spawn;
   // Collision (scene.json v4).
   std::optional<ColliderData> collider;
+  // Sprite animation (scene.json v5).
+  std::optional<AnimatorData> animator;
 
   float center_x() const { return x + w * 0.5f; }
   float center_y() const { return y + h * 0.5f; }
