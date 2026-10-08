@@ -4,6 +4,7 @@
 # headless server can all drive it.
 add_library(ts_runtime
   World.cpp
+  World_Collision.cpp
   PlaySession.cpp
 )
 

@@ -7,6 +7,7 @@
 #include "runtime/Input.h"
 #include "runtime/World.h"
 #include "scene/SceneData.h"
+#include "scene/TileMap.h"
 
 #include <cstdint>
 #include <string>
@@ -31,6 +32,10 @@ class PlaySession {
   // never touched). Starts Playing. Restarts if already running.
   bool start(const std::vector<Entity2D>& entities,
              const std::string& project_dir, std::string* error_out = nullptr);
+  // Same, with the scene's tile solidity (editor Play passes its own).
+  bool start(const std::vector<Entity2D>& entities,
+             const TileSolidity& solidity, const std::string& project_dir,
+             std::string* error_out = nullptr);
   // Same, from <project_dir>/scene.json (ts_game).
   bool start_project(const std::string& project_dir,
                      std::string* error_out = nullptr);

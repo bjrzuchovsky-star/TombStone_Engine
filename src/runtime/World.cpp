@@ -27,7 +27,14 @@ std::string resolve_asset(const std::string& project_dir,
 
 bool World::build(const std::vector<Entity2D>& entities,
                   const std::string& project_dir, std::string* error_out) {
+  return build(entities, TileSolidity{}, project_dir, error_out);
+}
+
+bool World::build(const std::vector<Entity2D>& entities,
+                  const TileSolidity& solidity,
+                  const std::string& project_dir, std::string* error_out) {
   clear();
+  solidity_ = solidity;
   project_dir_ = project_dir;
   if (entities.empty()) {
     if (error_out) *error_out = "The scene is empty. Nothing to ride.";
@@ -63,6 +70,7 @@ bool World::build(const std::vector<Entity2D>& entities,
     plain.push_back(a.data);
   }
   draw_order_ = draw_order(plain);
+  setup_collision();
   setup_camera();
   return true;
 }
@@ -74,7 +82,7 @@ bool World::load_project(const std::string& project_dir,
                              &doc, error_out)) {
     return false;
   }
-  return build(doc.entities, project_dir, error_out);
+  return build(doc.entities, doc.tile_solidity, project_dir, error_out);
 }
 
 void World::clear() {
@@ -83,6 +91,16 @@ void World::clear() {
   cam_ = CameraRig{};
   tick_ = 0;
   project_dir_.clear();
+  solidity_ = TileSolidity{};
+  grids_.clear();
+  static_solids_.clear();
+  dynamics_.clear();
+  triggers_.clear();
+  step_limit_ = 1.0e9f;
+  inside_.clear();
+  events_.clear();
+  last_event_.reset();
+  events_total_ = 0;
 }
 
 Actor* World::find(std::uint64_t id) {
@@ -275,10 +293,13 @@ void World::step_players(const InputFrame& input) {
       mx /= len;
       my /= len;
     }
-    a.vx = mx * a.data.player->speed;
-    a.vy = my * a.data.player->speed;
-    a.data.x += a.vx * dt;
-    a.data.y += a.vy * dt;
+    const float x0 = a.data.x;
+    const float y0 = a.data.y;
+    move_body(a, mx * a.data.player->speed * dt,
+              my * a.data.player->speed * dt);
+    // Report what actually happened (0 when stopped flush on a wall).
+    a.vx = (a.data.x - x0) / dt;
+    a.vy = (a.data.y - y0) / dt;
     if (mx > 0.0f) {
       a.facing = 1;
     } else if (mx < 0.0f) {
@@ -291,8 +312,11 @@ void World::step(const InputFrame& input) {
   if (actors_.empty()) {
     return;
   }
+  events_.clear();
   step_players(input);
-  // Later: collision against solid tiles, sprite animation, scripts.
+  separate_dynamics();
+  update_triggers();
+  // Later: sprite animation, scripts hooked on trigger_events().
   step_camera();
   ++tick_;
 }

@@ -5,13 +5,17 @@
 // abstract input, and drawn by whoever asks for a draw list (ImGui in the
 // editor, OpenGL in ts_game). No UI or graphics API in here.
 
+#include "runtime/Collision.h"
 #include "runtime/Input.h"
 #include "scene/SceneData.h"
+#include "scene/TileMap.h"
 
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace ts {
@@ -29,8 +33,8 @@ struct Actor {
   Entity2D data;
   float prev_x = 0.0f;  // position before the latest tick (interpolation)
   float prev_y = 0.0f;
-  float vx = 0.0f;      // world px / s during the latest tick
-  float vy = 0.0f;
+  float vx = 0.0f;      // world px / s actually moved in the latest tick
+  float vy = 0.0f;      // (after walls; 0 when stopped flush)
   int facing = 1;       // +1 right, -1 left (sprite flip / animation later)
 };
 
@@ -66,6 +70,18 @@ struct DrawQuad {
   std::uint64_t entity = 0;
 };
 
+// Something walked into or out of a trigger collider. Recorded per tick
+// for the scripting step to hook; nothing reacts to it yet.
+struct TriggerEvent {
+  enum class Kind { Enter, Exit };
+  Kind kind = Kind::Enter;
+  std::uint64_t trigger = 0;  // entity carrying the trigger collider
+  std::uint64_t other = 0;    // body that rode in / out
+  std::uint64_t tick = 0;     // the tick it happened on (1 = first tick)
+
+  bool operator==(const TriggerEvent& o) const = default;
+};
+
 // Image dimensions for a project-relative path; false when the file is
 // missing or does not decode. Lets the draw list compute UVs without
 // knowing about textures.
@@ -83,6 +99,10 @@ class World {
   // project-relative image paths. False (with a reason) for an empty scene.
   bool build(const std::vector<Entity2D>& entities,
              const std::string& project_dir = std::string(),
+             std::string* error_out = nullptr);
+  // Same, with the scene's tile solidity (which tile ids block riders).
+  bool build(const std::vector<Entity2D>& entities,
+             const TileSolidity& solidity, const std::string& project_dir,
              std::string* error_out = nullptr);
   // Read <project_dir>/scene.json and build from it.
   bool load_project(const std::string& project_dir,
@@ -113,6 +133,28 @@ class World {
   // World rect a camera shows on a width x height pixel view.
   static WorldRect view_rect(const CameraView& cam, float width, float height);
 
+  // --- Collision (World_Collision.cpp) ----------------------------------------
+  // Riders move one axis at a time (X, resolve, Y, resolve) against solid
+  // tiles and static solid colliders, in substeps of at most half the
+  // thinnest obstacle, so they slide along walls and never tunnel. Dynamic
+  // bodies that end a tick overlapping are pushed apart.
+  const TileSolidity& tile_solidity() const { return solidity_; }
+  // Trigger enter / exit events of the latest tick (cleared every tick).
+  const std::vector<TriggerEvent>& trigger_events() const { return events_; }
+  const std::optional<TriggerEvent>& last_trigger_event() const {
+    return last_event_;
+  }
+  std::uint64_t trigger_event_total() const { return events_total_; }
+  bool inside_trigger(std::uint64_t trigger, std::uint64_t other) const;
+  // "Player rode into Gate" (names from the scene).
+  std::string describe(const TriggerEvent& event) const;
+  // Collision overlay boxes visible in `view` (interpolated like the draw
+  // list); triggers with somebody inside are marked active.
+  void build_overlay(const WorldRect& view, float alpha,
+                     std::vector<OverlayBox>* out) const;
+  // Largest single move before resolution splits it (tests / overlay).
+  float substep_limit() const { return step_limit_; }
+
   // Quads for everything visible in `view`, back to front. Cameras and
   // spawn points are editor markers and do not draw.
   void build_draw_list(const WorldRect& view, float alpha,
@@ -130,7 +172,20 @@ class World {
     float prev_y = 0.0f;
   };
 
+  struct SolidGrid {
+    std::size_t actor = 0;  // TileMap actor (tilemaps never move)
+    SolidTable table;
+  };
+
   void setup_camera();
+  void setup_collision();
+  // Move by (dx, dy) with collision when the actor has a solid collider.
+  void move_body(Actor& a, float dx, float dy);
+  // After moving `delta` along axis (0 = x, 1 = y), back out of anything
+  // solid the move entered.
+  void resolve_axis(Actor& a, int axis, float delta);
+  void separate_dynamics();
+  void update_triggers();
   void step_players(const InputFrame& input);
   void step_camera();
   void clamp_camera(float* x, float* y) const;
@@ -143,6 +198,19 @@ class World {
   float view_h_ = 720.0f;
   std::uint64_t tick_ = 0;
   std::string project_dir_;
+
+  // Collision state (rebuilt by build()).
+  TileSolidity solidity_;
+  std::vector<SolidGrid> grids_;
+  std::vector<std::size_t> static_solids_;  // actor indices
+  std::vector<std::size_t> dynamics_;       // dynamic solid actors
+  std::vector<std::size_t> triggers_;       // trigger actors
+  float step_limit_ = 1.0e9f;
+  // (trigger id, other id) pairs overlapping after the latest tick, sorted.
+  std::vector<std::pair<std::uint64_t, std::uint64_t>> inside_;
+  std::vector<TriggerEvent> events_;
+  std::optional<TriggerEvent> last_event_;
+  std::uint64_t events_total_ = 0;
 };
 
 }  // namespace runtime

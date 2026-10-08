@@ -29,8 +29,15 @@ void PlaySession::reset_clock() {
 bool PlaySession::start(const std::vector<Entity2D>& entities,
                         const std::string& project_dir,
                         std::string* error_out) {
+  return start(entities, TileSolidity{}, project_dir, error_out);
+}
+
+bool PlaySession::start(const std::vector<Entity2D>& entities,
+                        const TileSolidity& solidity,
+                        const std::string& project_dir,
+                        std::string* error_out) {
   stop();
-  if (!world_.build(entities, project_dir, error_out)) {
+  if (!world_.build(entities, solidity, project_dir, error_out)) {
     world_.clear();
     return false;
   }
