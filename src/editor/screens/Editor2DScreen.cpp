@@ -1,5 +1,6 @@
 #include "editor/screens/Editor2DScreen.h"
 
+#include "editor/assets/AssetLibrary.h"
 #include "editor/workspace/SceneIO.h"
 
 #include <imgui.h>
@@ -73,12 +74,27 @@ void Editor2DScreen::on_enter() {
   }
 
   workspace_.clear_history();  // history is per open project, in memory only
+
+  // Supply Wagon: make sure <project>/assets exists and list it.
+  stroke_id_ = 0;
+  tool_ = TileTool::Select;
+  textures_.clear();
+  if (!project_.path.empty()) {
+    std::string asset_err;
+    if (!assets::ensure_assets_dir(project_.path, &asset_err)) {
+      std::cout << "[Editor2D] " << asset_err << '\n';
+    }
+  }
+  refresh_assets();
   std::cout << "[Editor2D] workspace for \"" << project_.name << "\" ("
             << to_string(project_.kind) << ") path=" << project_.path << '\n';
 }
 
 void Editor2DScreen::on_exit() {
   cancel_rename();
+  if (stroke_active()) {
+    end_paint_stroke();
+  }
   if (workspace_.move_active()) {
     workspace_.cancel_move();
     drag_mode_ = DragMode::None;
@@ -92,6 +108,7 @@ void Editor2DScreen::on_exit() {
   }
   workspace_.clear_history();
   edit_source_ = EditSource::None;
+  textures_.clear();
   std::cout << "[Editor2D] leaving workspace\n";
 }
 
@@ -331,6 +348,9 @@ bool Editor2DScreen::undo() {
     return false;  // mid-drag: finish or Esc first
   }
   cancel_rename();
+  if (stroke_active()) {
+    end_paint_stroke();
+  }
   flush_pending_edit();
   std::string label;
   if (!workspace_.undo(&label)) {
@@ -350,6 +370,9 @@ bool Editor2DScreen::redo() {
     return false;
   }
   cancel_rename();
+  if (stroke_active()) {
+    end_paint_stroke();
+  }
   flush_pending_edit();
   std::string label;
   if (!workspace_.redo(&label)) {

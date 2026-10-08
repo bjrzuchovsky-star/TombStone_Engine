@@ -23,6 +23,8 @@ add_library(ts_editor
   screens/Editor2DScreen_Panels.cpp
   screens/Editor2DScreen_Shell.cpp
   screens/Editor2DScreen_Viewport.cpp
+  screens/Editor2DScreen_Tiles.cpp
+  screens/Editor2DScreen_TilePanels.cpp
 )
 
 target_include_directories(ts_editor

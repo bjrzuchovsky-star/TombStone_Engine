@@ -42,9 +42,20 @@ void Editor2DScreen::setup_default_dock_layout(unsigned int dockspace_id) {
   ImGui::DockBuilderSplitNode(dock_main, ImGuiDir_Right, 0.30f, &dock_right,
                               &dock_center);
 
+  // Left column: Hierarchy over Supply Wagon. Right: Inspector over Tile
+  // Palette.
+  ImGuiID dock_left_bottom = 0;
+  ImGuiID dock_right_bottom = 0;
+  ImGui::DockBuilderSplitNode(dock_left, ImGuiDir_Down, 0.42f,
+                              &dock_left_bottom, &dock_left);
+  ImGui::DockBuilderSplitNode(dock_right, ImGuiDir_Down, 0.50f,
+                              &dock_right_bottom, &dock_right);
+
   ImGui::DockBuilderDockWindow("Hierarchy", dock_left);
+  ImGui::DockBuilderDockWindow("Supply Wagon", dock_left_bottom);
   ImGui::DockBuilderDockWindow("Viewport2D", dock_center);
   ImGui::DockBuilderDockWindow("Inspector", dock_right);
+  ImGui::DockBuilderDockWindow("Tile Palette", dock_right_bottom);
   ImGui::DockBuilderFinish(dockspace_id);
 }
 
@@ -78,6 +89,14 @@ void Editor2DScreen::draw_help_menu_contents() {
   theme::KeyHint("MMB/RMB/Alt", "Pan viewport");
   theme::KeyHint("Wheel", "Zoom toward cursor");
   theme::KeyHint("Ctrl+S", "Save scene.json");
+  ImGui::Separator();
+  theme::KeyHint("V", "Select tool");
+  theme::KeyHint("B / E", "Brush / Erase tiles (drag = 1 undo step)");
+  theme::KeyHint("F", "Bucket fill");
+  theme::KeyHint("R", "Rect fill (Shift: erase box)");
+  theme::KeyHint("I / Alt+click", "Pick tile from the map");
+  theme::KeyHint("1 / 2 / 3", "Brush size (tile tools)");
+  theme::KeyHint("Drag asset", "Supply Wagon -> viewport: new sprite");
 }
 
 void Editor2DScreen::draw_menu_bar() {
@@ -145,6 +164,9 @@ void Editor2DScreen::draw_menu_bar() {
     if (ImGui::MenuItem("Create Entity")) {
       create_entity("Entity");
     }
+    if (ImGui::MenuItem("Create TileMap")) {
+      create_tilemap();
+    }
     if (ImGui::MenuItem("Duplicate", "Ctrl+D", false, has_sel)) {
       duplicate_selected();
     }
@@ -172,6 +194,8 @@ void Editor2DScreen::draw_menu_bar() {
     ImGui::MenuItem("Hierarchy", nullptr, &show_hierarchy_);
     ImGui::MenuItem("Viewport", nullptr, &show_viewport_);
     ImGui::MenuItem("Inspector", nullptr, &show_inspector_);
+    ImGui::MenuItem("Tile Palette", nullptr, &show_tile_palette_);
+    ImGui::MenuItem("Supply Wagon", nullptr, &show_supply_wagon_);
     ImGui::MenuItem("Toolbar", nullptr, &show_toolbar_);
     ImGui::MenuItem("Status Bar", nullptr, &show_status_bar_);
     ImGui::Separator();
@@ -277,6 +301,9 @@ void Editor2DScreen::draw_toolbar() {
     ImGui::EndDisabled();
     ImGui::SameLine(0.0f, 18.0f);
   }
+
+  draw_tool_buttons();
+  ImGui::SameLine(0.0f, 18.0f);
 
   bool grid = workspace_.show_grid();
   if (theme::ToggleButton("Grid", &grid, ImVec2(56, 0))) {
@@ -407,6 +434,22 @@ void Editor2DScreen::draw_status_bar() {
     ImGui::TextDisabled("grid %.0f px", workspace_.grid_size());
   }
   sep();
+  if (tool_ != TileTool::Select) {
+    if (tool_ == TileTool::Paint || tool_ == TileTool::Erase) {
+      ImGui::TextColored(theme::Accent(), "%s %dx%d", to_string(tool_),
+                         brush_size_, brush_size_);
+    } else {
+      ImGui::TextColored(theme::Accent(), "%s", to_string(tool_));
+    }
+    if (hover_cell_valid_) {
+      ImGui::SameLine();
+      ImGui::TextDisabled("cell %d,%d tile %d", hover_col_, hover_row_,
+                          hover_tile_);
+    }
+  } else {
+    ImGui::TextDisabled("Select");
+  }
+  sep();
   const std::size_t count = workspace_.selection_count();
   if (const Entity2D* e = workspace_.selected()) {
     if (count > 1) {
@@ -477,6 +520,33 @@ void Editor2DScreen::handle_hotkeys() {
     if (const Entity2D* e = workspace_.selected()) {
       show_hierarchy_ = true;
       begin_rename(e->id);
+    }
+  }
+
+  // Tool hotkeys (no modifiers, not mid-drag).
+  if (!ctrl && !alt && !shift && drag_mode_ == DragMode::None) {
+    struct ToolKey {
+      ImGuiKey key;
+      TileTool tool;
+    };
+    static constexpr ToolKey kToolKeys[] = {
+        {ImGuiKey_V, TileTool::Select}, {ImGuiKey_B, TileTool::Paint},
+        {ImGuiKey_E, TileTool::Erase},  {ImGuiKey_F, TileTool::Fill},
+        {ImGuiKey_R, TileTool::Rect},   {ImGuiKey_I, TileTool::Eyedropper},
+    };
+    for (const ToolKey& k : kToolKeys) {
+      if (ImGui::IsKeyPressed(k.key, false) && tool_ != k.tool) {
+        set_tool(k.tool);
+      }
+    }
+    if (tool_ != TileTool::Select) {
+      const ImGuiKey size_keys[3] = {ImGuiKey_1, ImGuiKey_2, ImGuiKey_3};
+      for (int n = 0; n < 3; ++n) {
+        if (ImGui::IsKeyPressed(size_keys[n], false)) {
+          set_brush_size(n + 1);
+          note("Brush " + std::to_string(n + 1) + "x" + std::to_string(n + 1));
+        }
+      }
     }
   }
 
@@ -588,6 +658,28 @@ void Editor2DScreen::draw_ui() {
     }
     ImGui::End();
   }
+  if (show_tile_palette_) {
+    ImGui::SetNextWindowSize(ImVec2(300, 320), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("Tile Palette", &show_tile_palette_)) {
+      draw_tile_palette();
+    }
+    ImGui::End();
+  }
+  if (show_supply_wagon_) {
+    ImGui::SetNextWindowSize(ImVec2(300, 320), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("Supply Wagon", &show_supply_wagon_)) {
+      draw_supply_wagon();
+    }
+    ImGui::End();
+  }
+  if (import_browser_.draw("Import Image##SupplyWagon")) {
+    const std::string picked = import_browser_.take_result();
+    if (!picked.empty()) {
+      import_asset(picked);
+    }
+  }
+  // Reload images edited on disk (throttled to once a second).
+  textures_.poll_changes(now_seconds());
 
   handle_hotkeys();
 

@@ -3,6 +3,7 @@
 #include <imgui.h>
 
 #include <algorithm>
+#include <cctype>
 #include <system_error>
 
 namespace ts {
@@ -11,7 +12,39 @@ namespace editor {
 
 namespace fs = std::filesystem;
 
+void FolderBrowser::open_file(const std::string& start_path,
+                              std::vector<std::string> extensions,
+                              std::string prompt) {
+  extensions_ = std::move(extensions);
+  prompt_ = std::move(prompt);
+  file_mode_ = true;
+  open_ = true;
+  request_open_popup_ = true;
+  result_path_.clear();
+  error_.clear();
+  selected_dir_ = -1;
+  selected_file_ = -1;
+  std::error_code ec;
+  fs::path start = start_path.empty() ? fs::current_path(ec)
+                                      : fs::absolute(start_path, ec);
+  if (ec || start.empty()) {
+    start = fs::path(start_path.empty() ? "." : start_path);
+  }
+  if (!fs::is_directory(start, ec)) {
+    start = start.parent_path();
+  }
+  if (start.empty()) {
+    start = fs::current_path(ec);
+  }
+  navigate_to(start);
+}
+
 void FolderBrowser::open(const std::string& start_path) {
+  file_mode_ = false;
+  extensions_.clear();
+  prompt_.clear();
+  files_.clear();
+  selected_file_ = -1;
   open_ = true;
   request_open_popup_ = true;
   result_path_.clear();
@@ -78,7 +111,9 @@ void FolderBrowser::navigate_up() {
 
 void FolderBrowser::refresh_listing() {
   dirs_.clear();
+  files_.clear();
   selected_dir_ = -1;
+  selected_file_ = -1;
   error_.clear();
 
   std::error_code ec;
@@ -92,6 +127,18 @@ void FolderBrowser::refresh_listing() {
     const fs::directory_entry& entry = *it;
     std::error_code entry_ec;
     if (!entry.is_directory(entry_ec)) {
+      if (file_mode_ && entry.is_regular_file(entry_ec)) {
+        std::string ext = entry.path().extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(),
+                       [](unsigned char c) {
+                         return static_cast<char>(std::tolower(c));
+                       });
+        if (extensions_.empty() ||
+            std::find(extensions_.begin(), extensions_.end(), ext) !=
+                extensions_.end()) {
+          files_.push_back(entry.path().filename().generic_string());
+        }
+      }
       continue;
     }
     dirs_.push_back(entry.path().filename().generic_string());
@@ -103,6 +150,7 @@ void FolderBrowser::refresh_listing() {
             [](const std::string& a, const std::string& b) {
               return a < b;
             });
+  std::sort(files_.begin(), files_.end());
 }
 
 bool FolderBrowser::draw(const char* popup_id) {
@@ -124,7 +172,8 @@ bool FolderBrowser::draw(const char* popup_id) {
 
   if (ImGui::BeginPopupModal(popup_id, nullptr,
                              ImGuiWindowFlags_NoResize)) {
-    ImGui::TextUnformatted("Select a folder for projects_root");
+    ImGui::TextUnformatted(file_mode_ ? prompt_.c_str()
+                                      : "Select a folder for projects_root");
     ImGui::Separator();
 
     ImGui::TextWrapped("%s", current_display_.c_str());
@@ -150,22 +199,57 @@ bool FolderBrowser::draw(const char* popup_id) {
 
     ImGui::BeginChild("##FolderList", ImVec2(0, -48),
                       ImGuiChildFlags_Borders);
-    if (dirs_.empty() && error_.empty()) {
-      ImGui::TextDisabled("(no subfolders)");
+    if (dirs_.empty() && files_.empty() && error_.empty()) {
+      ImGui::TextDisabled(file_mode_ ? "(nothing here)" : "(no subfolders)");
     }
-    for (int i = 0; i < static_cast<int>(dirs_.size()); ++i) {
+    bool navigated = false;
+    for (int i = 0; i < static_cast<int>(dirs_.size()) && !navigated; ++i) {
       const bool selected = (selected_dir_ == i);
-      if (ImGui::Selectable(dirs_[i].c_str(), selected,
+      const std::string label =
+          file_mode_ ? "[dir] " + dirs_[static_cast<std::size_t>(i)]
+                     : dirs_[static_cast<std::size_t>(i)];
+      if (ImGui::Selectable(label.c_str(), selected,
                             ImGuiSelectableFlags_AllowDoubleClick)) {
         selected_dir_ = i;
+        selected_file_ = -1;
         if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
           navigate_to(current_ / dirs_[static_cast<std::size_t>(i)]);
+          navigated = true;
+        }
+      }
+    }
+    for (int i = 0; i < static_cast<int>(files_.size()) && !navigated; ++i) {
+      const bool selected = (selected_file_ == i);
+      if (ImGui::Selectable(files_[static_cast<std::size_t>(i)].c_str(),
+                            selected, ImGuiSelectableFlags_AllowDoubleClick)) {
+        selected_file_ = i;
+        selected_dir_ = -1;
+        if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+          result_path_ =
+              (current_ / files_[static_cast<std::size_t>(i)]).string();
+          confirmed = true;
+          open_ = false;
+          ImGui::CloseCurrentPopup();
         }
       }
     }
     ImGui::EndChild();
 
-    if (ImGui::Button("Select This Folder", ImVec2(160, 0))) {
+    if (file_mode_) {
+      const bool has_file =
+          selected_file_ >= 0 &&
+          selected_file_ < static_cast<int>(files_.size());
+      ImGui::BeginDisabled(!has_file || confirmed);
+      if (ImGui::Button("Pick File", ImVec2(160, 0)) && has_file) {
+        result_path_ =
+            (current_ / files_[static_cast<std::size_t>(selected_file_)])
+                .string();
+        confirmed = true;
+        open_ = false;
+        ImGui::CloseCurrentPopup();
+      }
+      ImGui::EndDisabled();
+    } else if (ImGui::Button("Select This Folder", ImVec2(160, 0))) {
       result_path_ = current_display_;
       confirmed = true;
       open_ = false;

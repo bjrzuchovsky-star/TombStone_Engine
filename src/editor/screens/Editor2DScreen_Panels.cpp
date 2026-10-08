@@ -103,6 +103,16 @@ void Editor2DScreen::draw_hierarchy() {
       }
       ImGui::TreeNodeEx(reinterpret_cast<void*>(static_cast<uintptr_t>(e.id)),
                         flags, "%s", e.name.c_str());
+      if (e.tilemap || e.sprite) {
+        // Component tag, right-aligned in the row.
+        const char* tag = e.tilemap ? "tiles" : "sprite";
+        const ImVec2 mx = ImGui::GetItemRectMax();
+        const ImVec2 mn = ImGui::GetItemRectMin();
+        const float tw = ImGui::CalcTextSize(tag).x;
+        ImGui::GetWindowDrawList()->AddText(
+            ImVec2(mx.x - tw - 6.0f, mn.y + ImGui::GetStyle().FramePadding.y),
+            theme::U32(theme::TextMuted()), tag);
+      }
       if (primary) {
         const ImVec2 mn = ImGui::GetItemRectMin();
         const ImVec2 mx = ImGui::GetItemRectMax();
@@ -286,8 +296,19 @@ void Editor2DScreen::draw_inspector() {
                                                    : "Transform");
     transform_field("X", &e->x, 0, -1.0e6f, 1.0e6f, false);
     transform_field("Y", &e->y, 1, -1.0e6f, 1.0e6f, false);
-    transform_field("W", &e->w, 2, 1.0f, 4096.0f, true);
-    transform_field("H", &e->h, 3, 1.0f, 4096.0f, true);
+    if (e->tilemap) {
+      // A TileMap's size is its grid: edit Cols / Rows / Tile px below.
+      ImGui::BeginDisabled();
+      float wh[2] = {e->w, e->h};
+      ImGui::InputFloat2("W / H", wh, "%.0f");
+      ImGui::EndDisabled();
+      if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+        ImGui::SetTooltip("Follows Cols x Tile px and Rows x Tile px.");
+      }
+    } else {
+      transform_field("W", &e->w, 2, 1.0f, 4096.0f, true);
+      transform_field("H", &e->h, 3, 1.0f, 4096.0f, true);
+    }
     if (count > 1 || !workspace_.snap_enabled()) {
       if (theme::SecondaryButton("Snap selection to grid", ImVec2(-1, 0))) {
         snap_selected_to_grid();
@@ -305,6 +326,12 @@ void Editor2DScreen::draw_inspector() {
       mark_dirty();
     }
     track_inspector_item("Edit Layer");
+
+    // TileMap or Sprite section. Uses discrete steps that may flush the
+    // coalesced edit above, so re-fetch the entity afterwards.
+    const std::uint64_t eid = e->id;
+    draw_inspector_components(*e);
+    e = workspace_.find(eid);
   }
 
   ImGui::Spacing();
