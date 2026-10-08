@@ -42,17 +42,23 @@ void Editor2DScreen::setup_default_dock_layout(unsigned int dockspace_id) {
   ImGui::DockBuilderSplitNode(dock_main, ImGuiDir_Right, 0.30f, &dock_right,
                               &dock_center);
 
-  // Left column: Hierarchy over Supply Wagon. Right: Inspector over Tile
-  // Palette, with the Stable tabbed beside it.
+  // Left column: Hierarchy over Supply Wagon (Scripts tabbed beside it).
+  // Right: Inspector over Tile Palette, with the Stable tabbed beside it.
+  // The Telegraph runs along the bottom of the Viewport.
   ImGuiID dock_left_bottom = 0;
   ImGuiID dock_right_bottom = 0;
+  ImGuiID dock_bottom = 0;
   ImGui::DockBuilderSplitNode(dock_left, ImGuiDir_Down, 0.42f,
                               &dock_left_bottom, &dock_left);
   ImGui::DockBuilderSplitNode(dock_right, ImGuiDir_Down, 0.50f,
                               &dock_right_bottom, &dock_right);
+  ImGui::DockBuilderSplitNode(dock_center, ImGuiDir_Down, 0.26f, &dock_bottom,
+                              &dock_center);
 
   ImGui::DockBuilderDockWindow("Hierarchy", dock_left);
   ImGui::DockBuilderDockWindow("Supply Wagon", dock_left_bottom);
+  ImGui::DockBuilderDockWindow("Scripts", dock_left_bottom);
+  ImGui::DockBuilderDockWindow("Telegraph", dock_bottom);
   ImGui::DockBuilderDockWindow("Viewport2D", dock_center);
   ImGui::DockBuilderDockWindow("Inspector", dock_right);
   ImGui::DockBuilderDockWindow("Tile Palette", dock_right_bottom);
@@ -104,6 +110,7 @@ void Editor2DScreen::draw_help_menu_contents() {
   theme::KeyHint("F5 / Ctrl+P", "Play / Stop (Stop restores the scene)");
   theme::KeyHint("F6 / F10", "Pause / step one tick while paused");
   theme::KeyHint("WASD / arrows", "Ride player 1 (gamepads: P1-P4)");
+  theme::KeyHint("E / Space", "Action while riding (pad A): gates, signs");
   theme::KeyHint("C", "Free camera while playing");
 }
 
@@ -209,6 +216,8 @@ void Editor2DScreen::draw_menu_bar() {
     ImGui::MenuItem("Tile Palette", nullptr, &show_tile_palette_);
     ImGui::MenuItem("Supply Wagon", nullptr, &show_supply_wagon_);
     ImGui::MenuItem("Stable (Animation)", nullptr, &show_stable_);
+    ImGui::MenuItem("Scripts", nullptr, &show_scripts_);
+    ImGui::MenuItem("Telegraph (Console)", nullptr, &show_console_);
     ImGui::MenuItem("Toolbar", nullptr, &show_toolbar_);
     ImGui::MenuItem("Status Bar", nullptr, &show_status_bar_);
     ImGui::Separator();
@@ -497,6 +506,8 @@ void Editor2DScreen::draw_status_bar() {
       ImGui::TextDisabled("no selection");
     }
   }
+  sep();
+  draw_telegraph_badge();
   const double now = ImGui::GetTime();
   if (!status_note_.empty() && now - status_note_time_ < 3.0) {
     sep();
@@ -763,6 +774,25 @@ void Editor2DScreen::draw_ui() {
       ImGui::BeginDisabled(locked);
       draw_stable();
       ImGui::EndDisabled();
+    }
+    ImGui::End();
+  }
+  if (show_scripts_) {
+    // Stays live while riding: open a script, save, watch it hot-reload.
+    ImGui::SetNextWindowSize(ImVec2(300, 360), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("Scripts", &show_scripts_)) {
+      draw_scripts_panel();
+    }
+    ImGui::End();
+  }
+  if (show_console_) {
+    ImGui::SetNextWindowSize(ImVec2(640, 220), ImGuiCond_FirstUseEver);
+    if (focus_console_) {
+      ImGui::SetNextWindowFocus();
+      focus_console_ = false;
+    }
+    if (ImGui::Begin("Telegraph", &show_console_)) {
+      draw_console();
     }
     ImGui::End();
   }
