@@ -25,6 +25,7 @@ add_library(ts_editor
   screens/Editor2DScreen_Play.cpp
   screens/Editor2DScreen_Collision.cpp
   screens/Editor2DScreen_Anim.cpp
+  screens/Editor2DScreen_Stable.cpp
   launch/GameLauncher.cpp
 )
 

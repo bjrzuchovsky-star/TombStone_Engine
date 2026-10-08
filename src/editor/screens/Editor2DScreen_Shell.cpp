@@ -43,7 +43,7 @@ void Editor2DScreen::setup_default_dock_layout(unsigned int dockspace_id) {
                               &dock_center);
 
   // Left column: Hierarchy over Supply Wagon. Right: Inspector over Tile
-  // Palette.
+  // Palette, with the Stable tabbed beside it.
   ImGuiID dock_left_bottom = 0;
   ImGuiID dock_right_bottom = 0;
   ImGui::DockBuilderSplitNode(dock_left, ImGuiDir_Down, 0.42f,
@@ -56,6 +56,7 @@ void Editor2DScreen::setup_default_dock_layout(unsigned int dockspace_id) {
   ImGui::DockBuilderDockWindow("Viewport2D", dock_center);
   ImGui::DockBuilderDockWindow("Inspector", dock_right);
   ImGui::DockBuilderDockWindow("Tile Palette", dock_right_bottom);
+  ImGui::DockBuilderDockWindow("Stable", dock_right_bottom);
   ImGui::DockBuilderFinish(dockspace_id);
 }
 
@@ -97,6 +98,8 @@ void Editor2DScreen::draw_help_menu_contents() {
   theme::KeyHint("I / Alt+click", "Pick tile from the map");
   theme::KeyHint("1 / 2 / 3", "Brush size (tile tools)");
   theme::KeyHint("Drag asset", "Supply Wagon -> viewport: new sprite");
+  theme::KeyHint("Stable", "Cut a sheet into clips (sheets with a .anim.json "
+                           "drop in animated)");
   ImGui::Separator();
   theme::KeyHint("F5 / Ctrl+P", "Play / Stop (Stop restores the scene)");
   theme::KeyHint("F6 / F10", "Pause / step one tick while paused");
@@ -205,9 +208,15 @@ void Editor2DScreen::draw_menu_bar() {
     ImGui::MenuItem("Inspector", nullptr, &show_inspector_);
     ImGui::MenuItem("Tile Palette", nullptr, &show_tile_palette_);
     ImGui::MenuItem("Supply Wagon", nullptr, &show_supply_wagon_);
+    ImGui::MenuItem("Stable (Animation)", nullptr, &show_stable_);
     ImGui::MenuItem("Toolbar", nullptr, &show_toolbar_);
     ImGui::MenuItem("Status Bar", nullptr, &show_status_bar_);
     ImGui::Separator();
+    ImGui::MenuItem("Preview Animations", nullptr, &anim_preview_);
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("Edit mode: animators run their default clip in the "
+                        "viewport. Off = first frame.");
+    }
     // Grid / snap / camera are saved with the scene: edit mode only.
     ImGui::BeginDisabled(is_playing());
     const bool grid = workspace_.show_grid();
@@ -744,6 +753,15 @@ void Editor2DScreen::draw_ui() {
     if (ImGui::Begin("Supply Wagon", &show_supply_wagon_)) {
       ImGui::BeginDisabled(locked);
       draw_supply_wagon();
+      ImGui::EndDisabled();
+    }
+    ImGui::End();
+  }
+  if (show_stable_) {
+    ImGui::SetNextWindowSize(ImVec2(320, 460), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("Stable", &show_stable_)) {
+      ImGui::BeginDisabled(locked);
+      draw_stable();
       ImGui::EndDisabled();
     }
     ImGui::End();
