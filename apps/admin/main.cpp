@@ -1,6 +1,7 @@
 #include "core/Engine.h"
 #include "editor/AppFlow.h"
 #include "editor/AppState.h"
+#include "editor/screens/Editor2DScreen.h"
 #include "editor/settings/Settings.h"
 #include "editor/workspace/SceneIO.h"
 #include "editor/ui/Brand.h"
@@ -268,6 +269,11 @@ int run_console_smoke() {
     engine.shutdown();
     return 1;
   }
+  if (ws2->can_undo() || ws2->can_redo()) {
+    std::cerr << "Undo history should be empty after opening a project\n";
+    engine.shutdown();
+    return 1;
+  }
 
   // Editor tools through the screen: Ctrl+D / Del paths must autosave.
   {
@@ -315,6 +321,206 @@ int run_console_smoke() {
       return 1;
     }
     std::cout << "[smoke] duplicate/delete autosave OK\n";
+  }
+
+  // Undo / redo through the screen: create, drag-move, duplicate, nudge,
+  // Inspector edit, delete -> undo all, redo all, new edit clears redo, and
+  // scene.json follows every step.
+  {
+    auto fail = [&](const std::string& what) {
+      std::cerr << "Undo/redo smoke failed: " << what << '\n';
+      engine.shutdown();
+      return 1;
+    };
+    // Reopen so history starts empty (history is per open project).
+    flow.request_back_to_projects();
+    bool again = false;
+    for (std::size_t i = 0; i < flow.projects().size(); ++i) {
+      if (flow.projects()[i].path == opened_path) {
+        again = flow.select_project(i);
+        break;
+      }
+    }
+    editor::Editor2DScreen* scr = flow.editor_screen();
+    if (!again || !scr) return fail("reopen project");
+    editor::Workspace2D& w = scr->workspace();
+    if (w.can_undo() || w.can_redo()) return fail("history not cleared on open");
+    if (flow.editor_undo()) return fail("undo on empty history");
+
+    auto disk_matches = [&](const editor::Workspace2D& ref) {
+      editor::Workspace2D d;
+      std::string err;
+      if (!editor::scene_io::load(d, scene_file.string(), &err) ||
+          d.entities() != ref.entities()) {
+        return false;
+      }
+      // An empty selection reloads as "first entity", so only compare a
+      // real one.
+      return ref.selection_count() == 0 ||
+             (d.selection() == ref.selection() &&
+              d.selected_id() == ref.selected_id());
+    };
+    auto same_state = [](const editor::Workspace2D& a,
+                         const editor::Workspace2D::Snapshot& s) {
+      return a.entities() == s.entities && a.selection() == s.selection &&
+             a.selected_id() == s.selected_id;
+    };
+
+    w.set_snap_enabled(false);
+    const editor::Workspace2D::Snapshot initial = w.snapshot();
+    std::vector<editor::Workspace2D::Snapshot> states{initial};
+    std::vector<std::string> labels;
+
+    // 1) Create.
+    const std::uint64_t crate = scr->create_entity("UndoCrate");
+    if (crate == 0) return fail("create");
+    states.push_back(w.snapshot());
+    labels.push_back(w.undo_label());
+
+    // 2) Group drag-move: many update frames, one step.
+    std::uint64_t other = 0;
+    for (const editor::Entity2D& e : w.entities()) {
+      if (e.id != crate) {
+        other = e.id;
+        break;
+      }
+    }
+    w.select(other);
+    w.add_to_selection(crate);
+    // Selection-only changes are not steps; undo restores the selection as
+    // it was when the next edit started.
+    states.back() = w.snapshot();
+    const float crate_x0 = w.find(crate)->x;
+    scr->begin_drag_move();
+    for (int f = 1; f <= 12; ++f) {
+      w.update_move(5.0f * static_cast<float>(f), 2.0f * static_cast<float>(f));
+    }
+    if (!scr->end_drag_move()) return fail("drag move reported no change");
+    if (w.find(crate)->x != crate_x0 + 60.0f) return fail("drag position");
+    if (w.undo_count() != 2 || w.undo_label() != "Move 2") {
+      return fail("drag should be ONE step labelled \"Move 2\" (got \"" +
+                  w.undo_label() + "\")");
+    }
+    if (!disk_matches(w)) return fail("move not autosaved");
+    states.push_back(w.snapshot());
+    labels.push_back(w.undo_label());
+
+    // A cancelled drag (Esc) leaves no step.
+    scr->begin_drag_move();
+    w.update_move(40.0f, 40.0f);
+    scr->cancel_drag_move();
+    if (w.undo_count() != 2 || !same_state(w, states.back())) {
+      return fail("cancelled drag should not add a step");
+    }
+
+    // 3) Duplicate.
+    if (scr->duplicate_selected() != 2) return fail("duplicate");
+    if (w.undo_label() != "Duplicate 2") return fail("duplicate label");
+    states.push_back(w.snapshot());
+    labels.push_back(w.undo_label());
+
+    // 4) Held-arrow nudge: 5 repeats coalesce into one step.
+    for (int i = 0; i < 5; ++i) {
+      scr->nudge_selected(1, 0, false);
+    }
+    if (w.undo_count() != 3 || !w.edit_open()) {
+      return fail("nudges should coalesce while held");
+    }
+    scr->flush_pending_edit();  // keys released + window elapsed
+    if (w.undo_count() != 4 || w.undo_label() != "Nudge 2") {
+      return fail("nudge should be ONE step");
+    }
+    states.push_back(w.snapshot());
+    labels.push_back(w.undo_label());
+
+    // 5) Inspector field: several value changes while active = one step.
+    w.select(crate);
+    states.back() = w.snapshot();
+    scr->begin_inspector_edit("Edit X");
+    for (int i = 0; i < 6; ++i) {
+      w.find(crate)->x += 3.5f;
+    }
+    w.find(crate)->color[1] = 0.125f;  // same activation, still one step
+    if (!scr->end_inspector_edit()) return fail("inspector edit not pushed");
+    if (w.undo_count() != 5 || w.undo_label() != "Edit X") {
+      return fail("inspector edit should be ONE step");
+    }
+    if (!disk_matches(w)) return fail("inspector edit not autosaved");
+    // Activate + deactivate without change: no step.
+    scr->begin_inspector_edit("Edit Y");
+    scr->end_inspector_edit();
+    if (w.undo_count() != 5) return fail("no-op inspector edit added a step");
+    states.push_back(w.snapshot());
+    labels.push_back(w.undo_label());
+
+    // 6) Delete (multi).
+    w.select(crate);
+    w.add_to_selection(other);
+    if (w.can_redo() || w.undo_count() != 5) return fail("selection made a step");
+    states.back() = w.snapshot();
+    if (scr->delete_selected() != 2) return fail("delete");
+    states.push_back(w.snapshot());
+    labels.push_back(w.undo_label());
+    if (w.undo_count() != 6 || w.can_redo()) return fail("6 steps expected");
+
+    // Undo everything, checking each intermediate state + scene.json.
+    for (std::size_t k = states.size() - 1; k > 0; --k) {
+      if (w.undo_label() != labels[k - 1]) return fail("undo label order");
+      if (!flow.editor_undo()) return fail("undo returned false");
+      if (!same_state(w, states[k - 1])) {
+        return fail("state after undo of \"" + labels[k - 1] + "\"");
+      }
+      if (!disk_matches(w)) {
+        return fail("scene.json after undo of \"" + labels[k - 1] + "\"");
+      }
+    }
+    if (w.can_undo() || w.redo_count() != 6) return fail("undo depth");
+    if (!same_state(w, initial)) return fail("undo-all != initial");
+    if (flow.editor_undo()) return fail("undo past start");
+
+    // Redo everything.
+    for (std::size_t k = 1; k < states.size(); ++k) {
+      if (w.redo_label() != labels[k - 1]) return fail("redo label order");
+      if (!flow.editor_redo()) return fail("redo returned false");
+      if (!same_state(w, states[k]) || !disk_matches(w)) {
+        return fail("state after redo of \"" + labels[k - 1] + "\"");
+      }
+    }
+    if (w.can_redo() || w.undo_count() != 6) return fail("redo depth");
+    if (flow.editor_redo()) return fail("redo past end");
+
+    // Undo two, then a new edit clears the redo stack.
+    flow.editor_undo();
+    flow.editor_undo();
+    if (w.redo_count() != 2) return fail("redo stack after 2 undos");
+    if (scr->create_entity("FreshClaim") == 0) return fail("create after undo");
+    if (w.can_redo() || flow.editor_redo()) return fail("new edit must clear redo");
+    if (w.undo_count() != 5 || w.undo_label() != "Create Entity") {
+      return fail("history after branch");
+    }
+    if (!disk_matches(w)) return fail("scene.json after branch");
+
+    // Undo back to the start one more time and confirm disk state.
+    while (flow.editor_undo()) {
+    }
+    if (!same_state(w, initial) || !disk_matches(w)) {
+      return fail("undo-all after branch");
+    }
+
+    // History cap (headless workspace).
+    editor::Workspace2D cap;
+    for (int i = 0; i < 260; ++i) {
+      editor::Workspace2D::Snapshot before = cap.snapshot();
+      cap.create_entity("Cap");
+      cap.commit_step("Create Entity", std::move(before));
+    }
+    if (cap.undo_count() != editor::Workspace2D::kMaxHistory) {
+      return fail("history cap");
+    }
+    std::cout << "[smoke] undo/redo OK (6 steps: create, move, duplicate, "
+                 "nudge, inspector, delete; undo-all, redo-all, redo cleared "
+                 "by new edit, scene.json in sync, cap "
+              << editor::Workspace2D::kMaxHistory << ")\n";
   }
 
   // Editor tools, headless: snap drag, nudge, multi-select, marquee,

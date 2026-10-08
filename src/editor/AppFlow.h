@@ -15,6 +15,8 @@ namespace ts {
 namespace tombstone {
 namespace editor {
 
+class Editor2DScreen;
+
 // Admin UI state machine:
 //   Loading -> Login -> ProjectManager -> Editor2D
 //                    \-> Settings <-> (Login | ProjectManager)
@@ -67,6 +69,13 @@ class AppFlow {
   // Return the number of entities affected (0 when not in Editor2D).
   std::size_t editor_duplicate_selected();
   std::size_t editor_delete_selected();
+  // Undo / redo through the screen (autosaves scene.json). False when there
+  // is nothing to undo/redo or not in Editor2D.
+  bool editor_undo();
+  bool editor_redo();
+  // Active Editor2D screen (nullptr otherwise); lets --smoke drive the same
+  // edit paths as the GUI.
+  Editor2DScreen* editor_screen();
 
   const std::vector<ProjectInfo>& projects() const {
     return project_store_.projects();

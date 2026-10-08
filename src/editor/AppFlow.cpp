@@ -391,6 +391,24 @@ std::size_t AppFlow::editor_delete_selected() {
   return 0;
 }
 
+bool AppFlow::editor_undo() {
+  if (auto* editor = dynamic_cast<Editor2DScreen*>(screen_.get())) {
+    return editor->undo();
+  }
+  return false;
+}
+
+bool AppFlow::editor_redo() {
+  if (auto* editor = dynamic_cast<Editor2DScreen*>(screen_.get())) {
+    return editor->redo();
+  }
+  return false;
+}
+
+Editor2DScreen* AppFlow::editor_screen() {
+  return dynamic_cast<Editor2DScreen*>(screen_.get());
+}
+
 void AppFlow::transition_to(AppState next) {
   if (screen_) {
     screen_->on_exit();

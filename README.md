@@ -121,12 +121,13 @@ Admin has its own look, kept in `src/editor/ui/Theme` (palette, metrics, custom-
 - Sharp 2-3 px corners with 1 px inked frame borders. Custom-drawn section headers (amber diamond, label, caption, fading copper rule), ornamental dividers, a headstone mark, title strips, and a branded progress bar. Hover and active states go copper and amber.
 - Copy keeps one short, dry voice: splash "TOMBSTONE / Four riders. One frontier. Build it right.", login "Sign the ledger. Ride in.", Project Manager "Claims" / "Break Ground" / "Bury Project?", and Settings sections "Territory / Rider / Lamplight / Trail". The editor status bar carries the brand, and the window title follows the open project.
 
-Editor2D runs in an ImGui **Docking** layout (Hierarchy / Viewport2D / Inspector) with a tool strip (Grid, Snap, cell size, Duplicate, Delete, Reset Cam, Save) and a status bar (fps, zoom, grid/snap, selection, recent action, path). Docking and multi-viewport flags are enabled in `apps/admin/main.cpp`.
+Editor2D runs in an ImGui **Docking** layout (Hierarchy / Viewport2D / Inspector) with a tool strip (Undo, Redo, Grid, Snap, cell size, Duplicate, Delete, Reset Cam, Save) and a status bar (fps, zoom, grid/snap, selection, recent action, path). Docking and multi-viewport flags are enabled in `apps/admin/main.cpp`.
 
 ### Editor2D tools
 
 | Action | Input |
 |---|---|
+| Undo / Redo | Ctrl+Z / Ctrl+Y or Ctrl+Shift+Z (also Edit menu and toolbar) |
 | Move selection | LMB drag in Viewport (Esc cancels mid-drag) |
 | Multi-select | Ctrl+click (toggle) / Shift+click (add; Hierarchy: range) |
 | Box select | LMB drag on empty canvas (Ctrl/Shift adds) |
@@ -136,6 +137,8 @@ Editor2D runs in an ImGui **Docking** layout (Hierarchy / Viewport2D / Inspector
 | Select all / clear / rename | Ctrl+A / Esc / F2 |
 
 When snap is on, drag moves, nudges, duplicates, and Inspector X/Y/W/H edits all land on the grid. In a group drag the primary snaps and the others keep their spacing. The Inspector edits the primary selection (amber outline) and shows the selection count. Every tool autosaves `scene.json`. `--smoke` covers snap, nudge, multi-select, box select, duplicate, and delete, plus autosave and persistence.
+
+**Undo / redo** covers every workspace edit: create, rename, delete (single or multi), duplicate, drag-move, arrow nudge, snap-selection-to-grid, Reset Scene, and Inspector edits (name, X/Y/W/H, tint, layer). History is snapshot based (entity list + selection), capped at 200 steps, kept in memory only, and cleared when a project is opened or closed. Continuous edits coalesce into one step: a whole viewport drag is one "Move", an Inspector field is one step from activation to release, and held or rapid arrow nudges (within 0.6 s) are one "Nudge". The Edit menu names the step ("Undo Move 3"), and the status bar reports "Undid: Move 3" / "Redid: Duplicate 2". Any new edit clears the redo stack. Undo and redo restore the selection from that step and autosave `scene.json`. Grid, snap, and camera are view settings and are not tracked. While a text field is active, Ctrl+Z belongs to the text field. `--smoke` runs six edits, undoes all of them back to the initial state, redoes them, checks that a new edit clears redo, and confirms `scene.json` after each step.
 
 ### Building admin with ImGui
 
