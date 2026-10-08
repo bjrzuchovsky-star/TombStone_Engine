@@ -1,6 +1,7 @@
 add_executable(ts_admin
   main.cpp
   SmokeRuntime.cpp
+  SmokeCollision.cpp
 )
 
 target_link_libraries(ts_admin

@@ -15,15 +15,18 @@ namespace tombstone {
 namespace scene_json {
 
 // Format version written by write(). 1 = entities only; 2 = optional
-// "tilemap" / "sprite" objects; 3 = optional "player" / "camera" / "spawn".
+// "tilemap" / "sprite" objects; 3 = optional "player" / "camera" / "spawn";
+// 4 = optional "collider" plus the scene-level "tile_solidity" table.
 // Older files still load (see upgrade notes in SceneJson.cpp).
-inline constexpr int kSceneVersion = 3;
+inline constexpr int kSceneVersion = 4;
 
 // Whole file: entities plus the editor's view state. The runtime only
 // reads `entities`; the rest round-trips untouched.
 struct SceneDoc {
   int version = kSceneVersion;  // as read (1 when the key is absent)
   std::vector<Entity2D> entities;
+  // Which tile ids block movement, per tileset (v4; defaults when absent).
+  TileSolidity tile_solidity;
   float pan_x = 0.0f;
   float pan_y = 0.0f;
   float zoom = 1.0f;
@@ -37,8 +40,8 @@ struct SceneDoc {
 // <project_dir>/scene.json
 std::string scene_path_for_project(const std::string& project_dir);
 
-// Parse scene.json text. Applies the v1 -> v2 TileMap and v2 -> v3 actor
-// upgrades. `source` only labels error messages.
+// Parse scene.json text. Applies the v1 -> v2 TileMap, v2 -> v3 actor and
+// v3 -> v4 player collider upgrades. `source` only labels error messages.
 bool parse(const std::string& text, SceneDoc* doc, std::string* error_out,
            const std::string& source = "scene.json");
 // Serialise (always the current version). Deterministic: same doc, same

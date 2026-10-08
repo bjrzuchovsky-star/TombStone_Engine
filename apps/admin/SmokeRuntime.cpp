@@ -1,5 +1,7 @@
 #include "SmokeRuntime.h"
 
+#include "SmokeCollision.h"
+
 #include "editor/ProjectInfo.h"
 #include "editor/launch/GameLauncher.h"
 #include "editor/screens/Editor2DScreen.h"
@@ -52,6 +54,11 @@ std::vector<Entity2D> seed_entities() {
   editor::Workspace2D w;
   w.reset_defaults();
   return w.entities();
+}
+
+// "\"version\": N" for the version scene.json is written at today.
+std::string current_version_tag() {
+  return "\"version\": " + std::to_string(scene_json::kSceneVersion);
 }
 
 std::uint64_t id_named(const std::vector<Entity2D>& es, const char* name) {
@@ -297,7 +304,7 @@ int check_scene_versions() {
     return fail("v2 -> v3 upgrade");
   }
   const std::string v3 = scene_json::write(doc);
-  if (v3.find("\"version\": 3") == std::string::npos ||
+  if (v3.find(current_version_tag()) == std::string::npos ||
       v3.find("\"player\": {\"slot\": 0, \"speed\": 160}") ==
           std::string::npos ||
       v3.find("\"camera\": {\"target\": 2, \"smoothing\": 0.15") ==
@@ -393,7 +400,7 @@ int check_play_mode() {
   if (!p0 || !p0->player) return fail("play: seed Player has no PlayerController");
   const float px0 = p0->x;
   const float speed = p0->player->speed;
-  if (disk_before.find("\"version\": 3") == std::string::npos ||
+  if (disk_before.find(current_version_tag()) == std::string::npos ||
       disk_before.find("\"player\"") == std::string::npos ||
       disk_before.find("\"camera\"") == std::string::npos) {
     return fail("play: seed scene.json missing v3 player/camera");
@@ -497,10 +504,10 @@ int check_play_mode() {
     scene_json::SceneDoc doc;
     doc.entities = es;
     std::string text = scene_json::write(doc);
-    const std::string v3 = "\"version\": 3";
-    const std::size_t at = text.find(v3);
-    if (at == std::string::npos) return fail("play: v3 marker");
-    text.replace(at, v3.size(), "\"version\": 2");
+    const std::string cur = current_version_tag();
+    const std::size_t at = text.find(cur);
+    if (at == std::string::npos) return fail("play: version marker");
+    text.replace(at, cur.size(), "\"version\": 2");
     std::ofstream out(editor::scene_io::scene_path_for_project(dir2.string()),
                       std::ios::binary);
     out << text;
@@ -535,7 +542,7 @@ int run_runtime_smoke() {
   }
   std::cout << "[smoke] runtime OK (60 Hz fixed step, player px/s, diagonal "
                "clamp, spawn point, follow camera + bounds, draw list, "
-               "pause/step/stop, v2 -> v3 upgrade + roundtrip)\n";
+               "pause/step/stop, v2 -> v3 -> v4 upgrade + roundtrip)\n";
   if (check_play_mode() != 0) {
     return 1;
   }
@@ -543,5 +550,5 @@ int run_runtime_smoke() {
                "camera follow, edit tools locked, pause holds, F10 = 1 "
                "tick, stop restores workspace byte-identical, undo history + "
                "scene.json untouched, v2 project rides)\n";
-  return 0;
+  return run_collision_smoke();
 }

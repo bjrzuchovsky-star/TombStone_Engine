@@ -133,8 +133,8 @@ bool skip_bracketed(std::string_view text, std::size_t& i) {
 
 using FlatMap = std::unordered_map<std::string, std::string>;
 
-// Flat object of scalars. Nested objects are captured as raw JSON text in
-// *nested (key -> "{...}") when provided; arrays are skipped. Numbers are
+// Flat object of scalars. Nested objects and arrays are captured as raw
+// JSON text in *nested (key -> "{...}" / "[...]") when provided. Numbers are
 // kept as their original text so floats read back bit-exact.
 std::optional<FlatMap> parse_flat_object(std::string_view text, std::size_t& i,
                                          FlatMap* nested = nullptr) {
@@ -161,8 +161,12 @@ std::optional<FlatMap> parse_flat_object(std::string_view text, std::size_t& i,
     } else if (auto b = parse_bool(text, i)) {
       out.emplace(*key, *b ? "true" : "false");
     } else if (i < text.size() && text[i] == '[') {
+      const std::size_t start = i;
       if (!skip_bracketed(text, i)) {
         return std::nullopt;
+      }
+      if (nested) {
+        nested->emplace(*key, std::string(text.substr(start, i - start)));
       }
       out.emplace(*key, "");
     } else if (i < text.size() && text[i] == '{') {
@@ -281,10 +285,74 @@ std::optional<FlatMap> parse_nested(const FlatMap& nested,
   return parse_flat_object(it->second, j);
 }
 
+// "[1, 2, 3]" -> ints. False on anything that is not a flat number array.
+bool parse_int_array(std::string_view text, std::vector<int>* out) {
+  out->clear();
+  std::size_t i = 0;
+  if (!match_char(text, i, '[')) {
+    return false;
+  }
+  skip_ws(text, i);
+  if (match_char(text, i, ']')) {
+    return true;
+  }
+  while (true) {
+    auto n = parse_number(text, i);
+    if (!n || !std::isfinite(*n) || *n < -2.0e9 || *n > 2.0e9) {
+      return false;
+    }
+    out->push_back(static_cast<int>(*n));
+    skip_ws(text, i);
+    if (match_char(text, i, ']')) {
+      return true;
+    }
+    if (!match_char(text, i, ',')) {
+      return false;
+    }
+  }
+}
+
+// Top-level v4 "tile_solidity": [{"tileset": "", "solid": [3, 5]}, ...].
+// i sits on the '['.
+bool parse_tile_solidity(std::string_view text, std::size_t& i,
+                         TileSolidity* out) {
+  out->overrides.clear();
+  if (!match_char(text, i, '[')) {
+    return false;
+  }
+  skip_ws(text, i);
+  if (match_char(text, i, ']')) {
+    return true;
+  }
+  while (true) {
+    FlatMap nested;
+    auto obj = parse_flat_object(text, i, &nested);
+    if (!obj) {
+      return false;
+    }
+    std::vector<int> ids;
+    const auto arr = nested.find("solid");
+    if (arr == nested.end() || !parse_int_array(arr->second, &ids)) {
+      return false;
+    }
+    out->overrides[map_string(*obj, "tileset", "")] = std::move(ids);
+    skip_ws(text, i);
+    if (match_char(text, i, ']')) {
+      break;
+    }
+    if (!match_char(text, i, ',')) {
+      return false;
+    }
+  }
+  out->normalize();
+  return true;
+}
+
 // Components: v2 "tilemap" {cols, rows, tile_size, tileset, encoding, data}
 // and "sprite" {path, flip_x, flip_y, use_src, src_x/src_y/src_w/src_h};
 // v3 "player" {slot, speed}, "camera" {target, smoothing, zoom, use_bounds,
-// bounds_x/y/w/h} and "spawn" {slot}.
+// bounds_x/y/w/h} and "spawn" {slot}; v4 "collider" {x, y, w, h,
+// type: "solid"|"trigger", body: "static"|"dynamic"}.
 bool apply_components(Entity2D& e, const FlatMap& nested, std::string* why) {
   auto bad = [&](const char* what) {
     if (why) *why = what;
@@ -354,6 +422,24 @@ bool apply_components(Entity2D& e, const FlatMap& nested, std::string* why) {
   } else if (nested.count("spawn")) {
     return bad("bad spawn object");
   }
+  if (auto co = parse_nested(nested, "collider")) {
+    ColliderData c;
+    c.offset_x = map_float(*co, "x", 0.0f);
+    c.offset_y = map_float(*co, "y", 0.0f);
+    c.w = map_float(*co, "w", e.w);
+    c.h = map_float(*co, "h", e.h);
+    const std::string type = map_string(*co, "type", "solid");
+    const std::string body = map_string(*co, "body", "static");
+    if ((type != "solid" && type != "trigger") ||
+        (body != "static" && body != "dynamic")) {
+      return bad("bad collider type/body");
+    }
+    c.trigger = type == "trigger";
+    c.dynamic = body == "dynamic";
+    e.collider = c;
+  } else if (nested.count("collider")) {
+    return bad("bad collider object");
+  }
   normalize_components(e);
   return true;
 }
@@ -398,6 +484,16 @@ void upgrade_v2_actors(std::vector<Entity2D>& entities) {
       cam.target = player ? player->id : 0;
       e.camera = cam;
       break;
+    }
+  }
+}
+
+// Version 1-3 scenes predate collision: every rider gets the default
+// dynamic collider (its whole rect) so old projects still bump into walls.
+void upgrade_v3_colliders(std::vector<Entity2D>& entities) {
+  for (Entity2D& e : entities) {
+    if (e.player && !e.collider) {
+      e.collider = default_collider(e);
     }
   }
 }
@@ -450,6 +546,15 @@ void write_entity(std::ostringstream& out, const Entity2D& e) {
   }
   if (e.spawn) {
     out << ",\n      \"spawn\": {\"slot\": " << e.spawn->slot << "}";
+  }
+  if (e.collider) {
+    const ColliderData& c = *e.collider;
+    out << ",\n      \"collider\": {\"x\": " << format_float(c.offset_x)
+        << ", \"y\": " << format_float(c.offset_y)
+        << ", \"w\": " << format_float(c.w)
+        << ", \"h\": " << format_float(c.h) << ", \"type\": \""
+        << (c.trigger ? "trigger" : "solid") << "\", \"body\": \""
+        << (c.dynamic ? "dynamic" : "static") << "\"}";
   }
   out << "\n";
   out << "    }";
@@ -577,6 +682,10 @@ bool parse(const std::string& text, SceneDoc* doc, std::string* error_out,
           }
         }
       }
+    } else if (*key == "tile_solidity") {
+      if (!parse_tile_solidity(text, i, &out.tile_solidity)) {
+        return fail("tile_solidity");
+      }
     } else if (*key == "selected_id") {
       skip_ws(text, i);
       if (i < text.size() && text[i] == 'n') {
@@ -628,6 +737,9 @@ bool parse(const std::string& text, SceneDoc* doc, std::string* error_out,
   if (out.version < 3) {
     upgrade_v2_actors(out.entities);
   }
+  if (out.version < 4) {
+    upgrade_v3_colliders(out.entities);
+  }
   *doc = std::move(out);
   return true;
 }
@@ -635,8 +747,9 @@ bool parse(const std::string& text, SceneDoc* doc, std::string* error_out,
 std::string write(const SceneDoc& doc) {
   std::ostringstream out;
   out << "{\n";
-  // v3: optional per-entity "player" / "camera" / "spawn" objects on top of
-  // v2's "tilemap" / "sprite". Older files still load; see parse().
+  // v4: optional per-entity "collider" plus the scene-level tile_solidity
+  // table, on top of v3's "player" / "camera" / "spawn" and v2's "tilemap" /
+  // "sprite". Older files still load; see parse().
   out << "  \"version\": " << kSceneVersion << ",\n";
   out << "  \"pan_x\": " << format_float(doc.pan_x) << ",\n";
   out << "  \"pan_y\": " << format_float(doc.pan_y) << ",\n";
@@ -660,6 +773,23 @@ std::string write(const SceneDoc& doc) {
     out << static_cast<unsigned long long>(doc.selection[i]);
   }
   out << "],\n";
+  TileSolidity solidity = doc.tile_solidity;
+  solidity.normalize();
+  if (solidity.overrides.empty()) {
+    out << "  \"tile_solidity\": [],\n";
+  } else {
+    out << "  \"tile_solidity\": [\n";
+    std::size_t n = 0;
+    for (const auto& [tileset, ids] : solidity.overrides) {
+      out << "    {\"tileset\": \"" << escape_string(tileset)
+          << "\", \"solid\": [";
+      for (std::size_t k = 0; k < ids.size(); ++k) {
+        out << (k > 0 ? ", " : "") << ids[k];
+      }
+      out << "]}" << (++n < solidity.overrides.size() ? "," : "") << "\n";
+    }
+    out << "  ],\n";
+  }
   out << "  \"entities\": [\n";
   for (std::size_t idx = 0; idx < doc.entities.size(); ++idx) {
     write_entity(out, doc.entities[idx]);
