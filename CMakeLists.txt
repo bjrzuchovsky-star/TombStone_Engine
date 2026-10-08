@@ -12,7 +12,6 @@ add_subdirectory(src/core)
 add_subdirectory(src/platform)
 add_subdirectory(src/render)
 add_subdirectory(src/input)
-add_subdirectory(src/net)
 add_subdirectory(src/physics)
 add_subdirectory(src/scene)
 
@@ -30,6 +29,13 @@ endif()
 if(TS_BUILD_ADMIN OR TS_BUILD_GAME)
   include(FetchLua)
   add_subdirectory(src/runtime)
+endif()
+
+# Networking (ts_net: Transport interface + ENet backend). ENet is fetched by
+# hash, only for the apps that talk over the wire.
+if(TS_BUILD_ADMIN OR TS_BUILD_CLIENT OR TS_BUILD_SERVER)
+  include(FetchENet)
+  add_subdirectory(src/net)
 endif()
 
 # Editor / Admin UI module (screens + AppFlow). Admin-only.

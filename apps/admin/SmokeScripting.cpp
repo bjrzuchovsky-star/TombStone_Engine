@@ -1,5 +1,7 @@
 #include "SmokeScripting.h"
 
+#include "SmokeNetwork.h"
+
 #include "scene/SceneData.h"
 #include "scene/SceneJson.h"
 
@@ -91,5 +93,10 @@ int run_scripting_smoke() {
   if (run_script_runtime_smoke() != 0) {
     return 1;
   }
-  return run_script_editor_smoke();
+  if (run_script_editor_smoke() != 0) {
+    return 1;
+  }
+  // Multiplayer last: it rides the scripted sample over loopback
+  // (SmokeNetwork.cpp).
+  return run_network_smoke();
 }

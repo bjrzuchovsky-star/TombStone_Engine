@@ -1,21 +1,35 @@
-#include "Net.h"
+#include "net/Net.h"
+
+#include <enet/enet.h>
+
+#include <mutex>
 
 namespace ts {
 namespace tombstone {
+namespace net {
 
-bool Net::init() {
-  // Stub: transport/protocol for a 2D four-player MMO will land here later.
-  ready_ = true;
+namespace {
+std::mutex g_mutex;
+int g_users = 0;
+}  // namespace
+
+bool net_startup(std::string* error_out) {
+  std::lock_guard<std::mutex> lock(g_mutex);
+  if (g_users == 0 && enet_initialize() != 0) {
+    if (error_out) *error_out = "Could not start networking (ENet / sockets).";
+    return false;
+  }
+  ++g_users;
   return true;
 }
 
-void Net::shutdown() {
-  ready_ = false;
+void net_shutdown() {
+  std::lock_guard<std::mutex> lock(g_mutex);
+  if (g_users > 0 && --g_users == 0) {
+    enet_deinitialize();
+  }
 }
 
-void Net::update() {
-  // Stub: tick net I/O / replication when implemented.
-}
-
+}  // namespace net
 }  // namespace tombstone
 }  // namespace ts
