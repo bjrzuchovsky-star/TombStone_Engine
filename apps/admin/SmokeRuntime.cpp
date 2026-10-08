@@ -1,5 +1,8 @@
 #include "SmokeRuntime.h"
 
+#include "editor/ProjectInfo.h"
+#include "editor/launch/GameLauncher.h"
+#include "editor/screens/Editor2DScreen.h"
 #include "editor/workspace/SceneIO.h"
 #include "editor/workspace/Workspace2D.h"
 #include "runtime/PlaySession.h"
@@ -11,6 +14,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -356,6 +360,172 @@ int check_scene_versions() {
   return 0;
 }
 
+
+// Editor Play mode, headless: the Editor2DScreen drives a PlaySession with
+// scripted input exactly as the Viewport does with the keyboard.
+int check_play_mode() {
+  namespace fs = std::filesystem;
+  const fs::path dir = fs::path("TombStoneProjects") / "_play_smoke";
+  std::error_code ec;
+  fs::remove_all(dir, ec);
+  fs::create_directories(dir, ec);
+  if (ec) return fail("play: create " + dir.string());
+
+  editor::ProjectInfo info;
+  info.id = "_play_smoke";
+  info.name = "Play Smoke";
+  info.path = dir.string();
+  editor::Editor2DScreen scr(info);
+  scr.on_enter();  // seeds Camera2D / Player / TileMap, writes scene.json
+  editor::Workspace2D& w = scr.workspace();
+  if (scr.create_entity("Crate") == 0) return fail("play: seed crate");
+  if (!w.can_undo()) return fail("play: crate should be undoable");
+
+  const fs::path scene = editor::scene_io::scene_path_for_project(info.path);
+  const std::string disk_before = read_file(scene);
+  const auto mtime_before = fs::last_write_time(scene, ec);
+  const std::string doc_before =
+      scene_json::write(editor::scene_io::to_doc(w));
+  const std::size_t undo_before = w.undo_count();
+  const std::size_t redo_before = w.redo_count();
+  const std::optional<std::uint64_t> sel_before = w.selected_id();
+  const Entity2D* p0 = find_entity_named(w.entities(), "Player");
+  if (!p0 || !p0->player) return fail("play: seed Player has no PlayerController");
+  const float px0 = p0->x;
+  const float speed = p0->player->speed;
+  if (disk_before.find("\"version\": 3") == std::string::npos ||
+      disk_before.find("\"player\"") == std::string::npos ||
+      disk_before.find("\"camera\"") == std::string::npos) {
+    return fail("play: seed scene.json missing v3 player/camera");
+  }
+
+  // Play.
+  if (!scr.start_play() || !scr.is_playing() || scr.is_paused()) {
+    return fail("play: start");
+  }
+  const runtime::World& world = scr.play_session().world();
+  const runtime::CameraView cam0 = world.camera();
+  const runtime::Actor* rider = world.player(0);
+  if (!rider) return fail("play: no rider in slot 0");
+
+  // Edit tools are locked while riding.
+  if (scr.create_entity("Nope") != 0 || scr.duplicate_selected() != 0 ||
+      scr.delete_selected() != 0 || scr.undo() || scr.redo() ||
+      scr.save_scene()) {
+    return fail("play: edit tools must be locked while playing");
+  }
+
+  // Ride right for one second of 60 Hz frames.
+  int ticks = 0;
+  for (int i = 0; i < 60; ++i) {
+    ticks += scr.update_play(1.0 / 60.0, move(1.0f, 0.0f));
+  }
+  const std::uint64_t t1 = scr.play_session().tick();
+  if (ticks < 59 || ticks > 61 || t1 != static_cast<std::uint64_t>(ticks)) {
+    return fail("play: expected ~60 ticks, got " + std::to_string(ticks));
+  }
+  rider = world.player(0);
+  const float want = px0 + speed * static_cast<float>(ticks) /
+                               static_cast<float>(runtime::kTickRate);
+  if (!rider || !near(rider->data.x, want, 0.05f)) {
+    return fail("play: rider x " +
+                std::to_string(rider ? rider->data.x : 0.0f) + " want " +
+                std::to_string(want));
+  }
+  const runtime::CameraView cam1 = world.camera();
+  if (!(cam1.x > cam0.x + speed * 0.5f)) {
+    return fail("play: camera did not follow the rider");
+  }
+
+  // Pause holds the world; F10 step is exactly one tick.
+  scr.toggle_pause_play();
+  if (!scr.is_paused()) return fail("play: pause");
+  const float held_x = world.player(0)->data.x;
+  if (scr.update_play(0.5, move(1.0f, 0.0f)) != 0 ||
+      scr.play_session().tick() != t1 ||
+      world.player(0)->data.x != held_x) {
+    return fail("play: paused world moved");
+  }
+  if (!scr.step_play() || scr.play_session().tick() != t1 + 1) {
+    return fail("play: step should advance exactly one tick");
+  }
+  scr.toggle_pause_play();
+  if (scr.is_paused() || !scr.is_playing()) return fail("play: resume");
+
+  // Ctrl+S / save while riding is refused and touches nothing.
+  if (scr.save_scene()) return fail("play: save while riding");
+
+  // Stop: the edit workspace comes back byte-identical; disk untouched.
+  scr.stop_play();
+  if (scr.is_playing()) return fail("play: stop");
+  const std::string doc_after =
+      scene_json::write(editor::scene_io::to_doc(w));
+  if (doc_after != doc_before) return fail("play: workspace changed by play");
+  if (w.undo_count() != undo_before || w.redo_count() != redo_before) {
+    return fail("play: undo history changed by play");
+  }
+  if (w.selected_id() != sel_before) return fail("play: selection changed");
+  if (read_file(scene) != disk_before ||
+      fs::last_write_time(scene, ec) != mtime_before) {
+    return fail("play: scene.json touched by play");
+  }
+  // Edit tools are back.
+  if (!scr.undo() || !scr.redo()) return fail("play: undo/redo after stop");
+
+  // Launcher lookup (info only: ts_game is optional).
+  const std::string game = editor::launcher::find_game_executable();
+  std::cout << "[smoke] launcher: "
+            << (game.empty() ? std::string("ts_game not built (Launch Game "
+                                           "shows a note)")
+                             : "ts_game at " + game)
+            << '\n';
+  scr.on_exit();
+
+  // A v2 scene.json opens in the editor as v3 with a rider + follow cam.
+  const fs::path dir2 = fs::path("TombStoneProjects") / "_play_smoke_v2";
+  fs::remove_all(dir2, ec);
+  fs::create_directories(dir2, ec);
+  {
+    editor::Workspace2D legacy;
+    legacy.reset_defaults();
+    std::vector<Entity2D> es = legacy.entities();
+    for (Entity2D& e : es) {
+      e.player.reset();
+      e.camera.reset();
+      e.spawn.reset();
+    }
+    scene_json::SceneDoc doc;
+    doc.entities = es;
+    std::string text = scene_json::write(doc);
+    const std::string v3 = "\"version\": 3";
+    const std::size_t at = text.find(v3);
+    if (at == std::string::npos) return fail("play: v3 marker");
+    text.replace(at, v3.size(), "\"version\": 2");
+    std::ofstream out(editor::scene_io::scene_path_for_project(dir2.string()),
+                      std::ios::binary);
+    out << text;
+  }
+  editor::ProjectInfo info2 = info;
+  info2.id = "_play_smoke_v2";
+  info2.path = dir2.string();
+  editor::Editor2DScreen scr2(info2);
+  scr2.on_enter();
+  const Entity2D* lp = find_entity_named(scr2.workspace().entities(), "Player");
+  const Entity2D* lc =
+      find_entity_named(scr2.workspace().entities(), "Camera2D");
+  if (!lp || !lp->player || !lc || !lc->camera || lc->camera->target != lp->id) {
+    return fail("play: v2 scene did not upgrade to rider + follow cam");
+  }
+  if (!scr2.start_play() || !scr2.play_session().world().player(0)) {
+    return fail("play: v2 scene play");
+  }
+  scr2.stop_play();
+  scr2.on_exit();
+  fs::remove_all(dir2, ec);
+  fs::remove_all(dir, ec);
+  return 0;
+}
+
 }  // namespace
 
 int run_runtime_smoke() {
@@ -366,5 +536,12 @@ int run_runtime_smoke() {
   std::cout << "[smoke] runtime OK (60 Hz fixed step, player px/s, diagonal "
                "clamp, spawn point, follow camera + bounds, draw list, "
                "pause/step/stop, v2 -> v3 upgrade + roundtrip)\n";
+  if (check_play_mode() != 0) {
+    return 1;
+  }
+  std::cout << "[smoke] play mode OK (play -> 60 ticks scripted ride, "
+               "camera follow, edit tools locked, pause holds, F10 = 1 "
+               "tick, stop restores workspace byte-identical, undo history + "
+               "scene.json untouched, v2 project rides)\n";
   return 0;
 }
