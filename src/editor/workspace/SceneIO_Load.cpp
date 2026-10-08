@@ -232,6 +232,9 @@ bool load(Workspace2D& workspace, const std::string& scene_path,
   float pan_y = 0.0f;
   float zoom = 1.0f;
   bool show_grid = true;
+  std::optional<float> grid_size;
+  std::optional<bool> snap;
+  std::vector<std::uint64_t> selection;
   std::optional<std::uint64_t> selected_id;
   std::vector<Entity2D> entities;
   bool saw_entities = false;
@@ -328,6 +331,56 @@ bool load(Workspace2D& workspace, const std::string& scene_path,
         return false;
       }
       show_grid = *b;
+    } else if (*key == "grid_size") {
+      auto n = parse_number(text, i);
+      if (!n) {
+        if (error_out) {
+          *error_out = "Invalid scene.json (grid_size): " + scene_path;
+        }
+        return false;
+      }
+      grid_size = static_cast<float>(*n);
+    } else if (*key == "snap") {
+      auto b = parse_bool(text, i);
+      if (!b) {
+        if (error_out) {
+          *error_out = "Invalid scene.json (snap): " + scene_path;
+        }
+        return false;
+      }
+      snap = *b;
+    } else if (*key == "selection") {
+      if (!match_char(text, i, '[')) {
+        if (error_out) {
+          *error_out = "Invalid scene.json (selection must be array): " +
+                       scene_path;
+        }
+        return false;
+      }
+      skip_ws(text, i);
+      if (!match_char(text, i, ']')) {
+        while (true) {
+          skip_ws(text, i);
+          auto n = parse_number(text, i);
+          if (!n || *n < 0.0) {
+            if (error_out) {
+              *error_out = "Invalid scene.json (selection): " + scene_path;
+            }
+            return false;
+          }
+          selection.push_back(static_cast<std::uint64_t>(*n + 0.5));
+          skip_ws(text, i);
+          if (match_char(text, i, ']')) {
+            break;
+          }
+          if (!match_char(text, i, ',')) {
+            if (error_out) {
+              *error_out = "Invalid scene.json (selection): " + scene_path;
+            }
+            return false;
+          }
+        }
+      }
     } else if (*key == "selected_id") {
       skip_ws(text, i);
       if (i < text.size() && text[i] == 'n') {
@@ -413,6 +466,16 @@ bool load(Workspace2D& workspace, const std::string& scene_path,
   }
   workspace.replace_scene(std::move(entities), selected_id, pan_x, pan_y, zoom,
                           show_grid);
+  // Optional editor-tool state (older scene.json files simply omit these).
+  if (grid_size) {
+    workspace.set_grid_size(*grid_size);
+  }
+  if (snap) {
+    workspace.set_snap_enabled(*snap);
+  }
+  if (!selection.empty()) {
+    workspace.set_selection(selection, workspace.selected_id());
+  }
   return true;
 }
 }  // namespace scene_io

@@ -67,12 +67,23 @@ bool save(const Workspace2D& workspace, const std::string& scene_path,
   out << "  \"zoom\": " << format_number(workspace.zoom()) << ",\n";
   out << "  \"show_grid\": " << (workspace.show_grid() ? "true" : "false")
       << ",\n";
+  out << "  \"grid_size\": " << format_number(workspace.grid_size()) << ",\n";
+  out << "  \"snap\": " << (workspace.snap_enabled() ? "true" : "false")
+      << ",\n";
   if (workspace.selected_id()) {
     out << "  \"selected_id\": "
         << static_cast<unsigned long long>(*workspace.selected_id()) << ",\n";
   } else {
     out << "  \"selected_id\": null,\n";
   }
+  out << "  \"selection\": [";
+  for (std::size_t i = 0; i < workspace.selection().size(); ++i) {
+    if (i > 0) {
+      out << ", ";
+    }
+    out << static_cast<unsigned long long>(workspace.selection()[i]);
+  }
+  out << "],\n";
   out << "  \"entities\": [\n";
   const auto& entities = workspace.entities();
   for (std::size_t idx = 0; idx < entities.size(); ++idx) {

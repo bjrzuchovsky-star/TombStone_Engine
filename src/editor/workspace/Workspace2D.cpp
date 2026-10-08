@@ -21,6 +21,9 @@ Workspace2D::Workspace2D() {
 void Workspace2D::reset_defaults() {
   entities_.clear();
   selected_id_.reset();
+  selection_.clear();
+  move_starts_.clear();
+  move_active_ = false;
   next_id_ = 1;
   pan_x_ = 0.0f;
   pan_y_ = 0.0f;
@@ -69,7 +72,7 @@ void Workspace2D::reset_defaults() {
   tilemap.layer = 0;
   entities_.push_back(tilemap);
 
-  selected_id_ = player.id;
+  select(player.id);
 }
 
 
@@ -79,15 +82,18 @@ void Workspace2D::replace_scene(std::vector<Entity2D> entities,
                                 bool show_grid) {
   entities_ = std::move(entities);
   selected_id_.reset();
+  selection_.clear();
+  move_starts_.clear();
+  move_active_ = false;
   pan_x_ = pan_x;
   pan_y_ = pan_y;
   set_zoom(zoom);
   show_grid_ = show_grid;
   sync_next_id_from_entities();
   if (selected_id && find(*selected_id)) {
-    selected_id_ = selected_id;
+    select(*selected_id);
   } else if (!entities_.empty()) {
-    selected_id_ = entities_.front().id;
+    select(entities_.front().id);
   }
 }
 
@@ -104,13 +110,136 @@ void Workspace2D::sync_next_id_from_entities() {
   }
 }
 
+bool Workspace2D::is_selected(std::uint64_t id) const {
+  return std::find(selection_.begin(), selection_.end(), id) !=
+         selection_.end();
+}
+
 void Workspace2D::select(std::optional<std::uint64_t> id) {
   if (!id) {
-    selected_id_.reset();
+    clear_selection();
     return;
   }
   if (find(*id)) {
     selected_id_ = id;
+    selection_.assign(1, *id);
+  }
+}
+
+void Workspace2D::add_to_selection(std::uint64_t id) {
+  if (!find(id)) {
+    return;
+  }
+  if (!is_selected(id)) {
+    selection_.push_back(id);
+  }
+  selected_id_ = id;
+}
+
+void Workspace2D::toggle_selection(std::uint64_t id) {
+  if (!find(id)) {
+    return;
+  }
+  const auto it = std::find(selection_.begin(), selection_.end(), id);
+  if (it != selection_.end()) {
+    selection_.erase(it);
+    if (selected_id_ && *selected_id_ == id) {
+      if (selection_.empty()) {
+        selected_id_.reset();
+      } else {
+        selected_id_ = selection_.back();
+      }
+    }
+    return;
+  }
+  selection_.push_back(id);
+  selected_id_ = id;
+}
+
+void Workspace2D::set_selection(const std::vector<std::uint64_t>& ids,
+                                std::optional<std::uint64_t> primary) {
+  selection_.clear();
+  for (std::uint64_t id : ids) {
+    if (find(id) && !is_selected(id)) {
+      selection_.push_back(id);
+    }
+  }
+  if (primary && is_selected(*primary)) {
+    selected_id_ = primary;
+  } else if (!selection_.empty()) {
+    selected_id_ = selection_.back();
+  } else {
+    selected_id_.reset();
+  }
+}
+
+void Workspace2D::select_all() {
+  std::vector<std::uint64_t> ids;
+  ids.reserve(entities_.size());
+  for (const auto& e : entities_) {
+    ids.push_back(e.id);
+  }
+  set_selection(ids, selected_id_);
+}
+
+void Workspace2D::clear_selection() {
+  selected_id_.reset();
+  selection_.clear();
+}
+
+std::size_t Workspace2D::select_in_rect(float x0, float y0, float x1, float y1,
+                                        bool additive) {
+  const float minx = std::min(x0, x1);
+  const float maxx = std::max(x0, x1);
+  const float miny = std::min(y0, y1);
+  const float maxy = std::max(y0, y1);
+  std::vector<std::uint64_t> ids;
+  if (additive) {
+    ids = selection_;
+  }
+  std::size_t hits = 0;
+  std::optional<std::uint64_t> primary = additive ? selected_id_ : std::nullopt;
+  for (std::size_t idx : sorted_draw_order()) {
+    const Entity2D& e = entities_[idx];
+    const bool overlap = e.x <= maxx && e.x + e.w >= minx && e.y <= maxy &&
+                         e.y + e.h >= miny;
+    if (!overlap) {
+      continue;
+    }
+    ++hits;
+    if (std::find(ids.begin(), ids.end(), e.id) == ids.end()) {
+      ids.push_back(e.id);
+    }
+    if (!primary) {
+      primary = e.id;  // lowest layer hit becomes primary unless additive
+    }
+  }
+  set_selection(ids, primary);
+  return hits;
+}
+
+std::optional<std::uint64_t> Workspace2D::pick(float wx, float wy) const {
+  std::optional<std::uint64_t> hit;
+  for (std::size_t idx : sorted_draw_order()) {
+    const Entity2D& e = entities_[idx];
+    if (wx >= e.x && wy >= e.y && wx <= e.x + e.w && wy <= e.y + e.h) {
+      hit = e.id;  // draw order ascending -> last hit is topmost
+    }
+  }
+  return hit;
+}
+
+void Workspace2D::prune_selection() {
+  selection_.erase(std::remove_if(selection_.begin(), selection_.end(),
+                                  [this](std::uint64_t id) {
+                                    return find(id) == nullptr;
+                                  }),
+                   selection_.end());
+  if (selected_id_ && !is_selected(*selected_id_)) {
+    selected_id_.reset();
+  }
+  if (!selected_id_ && !selection_.empty()) {
+    selected_id_ = selection_.back();
   }
 }
 
@@ -159,7 +288,7 @@ std::uint64_t Workspace2D::create_entity(std::string name) {
   e.h = 64.0f;
   e.layer = static_cast<int>(entities_.size());
   entities_.push_back(e);
-  selected_id_ = e.id;
+  select(e.id);
   return e.id;
 }
 
@@ -180,13 +309,183 @@ bool Workspace2D::delete_entity(std::uint64_t id) {
     return false;
   }
   entities_.erase(it);
-  if (selected_id_ && *selected_id_ == id) {
-    selected_id_.reset();
-    if (!entities_.empty()) {
-      selected_id_ = entities_.front().id;
-    }
+  const bool was_primary = selected_id_ && *selected_id_ == id;
+  prune_selection();
+  if (was_primary && selection_.empty() && !entities_.empty()) {
+    select(entities_.front().id);
   }
   return true;
+}
+
+std::vector<std::uint64_t> Workspace2D::duplicate_selection() {
+  std::vector<std::uint64_t> new_ids;
+  if (selection_.empty()) {
+    return new_ids;
+  }
+  const float offset = snap_enabled_ ? grid_size_ : 16.0f;
+  // Copy first: push_back below may reallocate entities_.
+  std::vector<Entity2D> sources;
+  for (std::uint64_t id : selection_) {
+    if (const Entity2D* e = find(id)) {
+      sources.push_back(*e);
+    }
+  }
+  std::optional<std::uint64_t> new_primary;
+  for (const Entity2D& src : sources) {
+    Entity2D copy = src;
+    copy.id = alloc_id();
+    copy.name = unique_name(entities_, strip_copy_suffix(src.name));
+    copy.x = src.x + offset;
+    copy.y = src.y + offset;
+    if (snap_enabled_) {
+      copy.x = snap_value(copy.x);
+      copy.y = snap_value(copy.y);
+    }
+    entities_.push_back(copy);
+    new_ids.push_back(copy.id);
+    if (selected_id_ && *selected_id_ == src.id) {
+      new_primary = copy.id;
+    }
+  }
+  set_selection(new_ids, new_primary);
+  return new_ids;
+}
+
+std::size_t Workspace2D::delete_selection() {
+  if (selection_.empty()) {
+    return 0;
+  }
+  const std::vector<std::uint64_t> doomed = selection_;
+  const std::size_t before = entities_.size();
+  entities_.erase(std::remove_if(entities_.begin(), entities_.end(),
+                                 [&doomed](const Entity2D& e) {
+                                   return std::find(doomed.begin(),
+                                                    doomed.end(),
+                                                    e.id) != doomed.end();
+                                 }),
+                  entities_.end());
+  clear_selection();
+  move_starts_.clear();
+  move_active_ = false;
+  return before - entities_.size();
+}
+
+float Workspace2D::snap_step(float v, int dir, float step) const {
+  if (dir == 0) {
+    return v;
+  }
+  const float g = grid_size_;
+  const float on = std::round(v / g) * g;
+  if (std::abs(on - v) < 1e-3f) {
+    return on + static_cast<float>(dir) * step;
+  }
+  // Off-grid: first land on the next grid line in the nudge direction.
+  const float next = dir > 0 ? std::ceil(v / g) * g : std::floor(v / g) * g;
+  return next + static_cast<float>(dir) * (step - g);
+}
+
+bool Workspace2D::nudge_selection(int dir_x, int dir_y, bool large) {
+  if (selection_.empty() || (dir_x == 0 && dir_y == 0)) {
+    return false;
+  }
+  const float step = snap_enabled_ ? grid_size_ * (large ? 4.0f : 1.0f)
+                                   : (large ? 10.0f : 1.0f);
+  bool moved = false;
+  for (std::uint64_t id : selection_) {
+    Entity2D* e = find(id);
+    if (!e) {
+      continue;
+    }
+    float nx = e->x + static_cast<float>(dir_x) * step;
+    float ny = e->y + static_cast<float>(dir_y) * step;
+    if (snap_enabled_) {
+      nx = snap_step(e->x, dir_x, step);
+      ny = snap_step(e->y, dir_y, step);
+    }
+    if (nx != e->x || ny != e->y) {
+      e->x = nx;
+      e->y = ny;
+      moved = true;
+    }
+  }
+  return moved;
+}
+
+bool Workspace2D::snap_selection_to_grid() {
+  bool changed = false;
+  for (std::uint64_t id : selection_) {
+    if (Entity2D* e = find(id)) {
+      const float nx = snap_always(e->x);
+      const float ny = snap_always(e->y);
+      if (nx != e->x || ny != e->y) {
+        e->x = nx;
+        e->y = ny;
+        changed = true;
+      }
+    }
+  }
+  return changed;
+}
+
+void Workspace2D::begin_move() {
+  move_starts_.clear();
+  for (std::uint64_t id : selection_) {
+    if (const Entity2D* e = find(id)) {
+      move_starts_.push_back({e->id, e->x, e->y});
+    }
+  }
+  move_active_ = !move_starts_.empty();
+  move_changed_ = false;
+}
+
+void Workspace2D::update_move(float dx, float dy) {
+  if (!move_active_) {
+    return;
+  }
+  if (snap_enabled_) {
+    // Snap the primary (or first) entity; everyone else keeps formation.
+    const MoveStart* anchor = &move_starts_.front();
+    if (selected_id_) {
+      for (const MoveStart& s : move_starts_) {
+        if (s.id == *selected_id_) {
+          anchor = &s;
+          break;
+        }
+      }
+    }
+    dx = snap_value(anchor->x + dx) - anchor->x;
+    dy = snap_value(anchor->y + dy) - anchor->y;
+  }
+  for (const MoveStart& s : move_starts_) {
+    if (Entity2D* e = find(s.id)) {
+      const float nx = s.x + dx;
+      const float ny = s.y + dy;
+      if (nx != e->x || ny != e->y) {
+        e->x = nx;
+        e->y = ny;
+      }
+      if (e->x != s.x || e->y != s.y) {
+        move_changed_ = true;
+      }
+    }
+  }
+}
+
+bool Workspace2D::end_move() {
+  bool changed = false;
+  if (move_active_) {
+    for (const MoveStart& s : move_starts_) {
+      if (const Entity2D* e = find(s.id)) {
+        if (e->x != s.x || e->y != s.y) {
+          changed = true;
+        }
+      }
+    }
+  }
+  move_starts_.clear();
+  move_active_ = false;
+  move_changed_ = false;
+  return changed;
 }
 
 void Workspace2D::set_pan(float x, float y) {
@@ -197,6 +496,43 @@ void Workspace2D::set_pan(float x, float y) {
 void Workspace2D::add_pan(float dx, float dy) {
   pan_x_ += dx;
   pan_y_ += dy;
+}
+
+void Workspace2D::cancel_move() {
+  for (const MoveStart& s : move_starts_) {
+    if (Entity2D* e = find(s.id)) {
+      e->x = s.x;
+      e->y = s.y;
+    }
+  }
+  move_starts_.clear();
+  move_active_ = false;
+  move_changed_ = false;
+}
+
+void Workspace2D::set_grid_size(float g) {
+  if (!(g == g)) {  // NaN guard
+    return;
+  }
+  grid_size_ = std::clamp(g, kMinGrid, kMaxGrid);
+}
+
+float Workspace2D::snap_always(float v) const {
+  if (grid_size_ <= 0.0f) {
+    return v;
+  }
+  return std::round(v / grid_size_) * grid_size_;
+}
+
+float Workspace2D::snap_value(float v) const {
+  return snap_enabled_ ? snap_always(v) : v;
+}
+
+float Workspace2D::snap_extent(float v) const {
+  if (!snap_enabled_) {
+    return v;
+  }
+  return std::max(grid_size_, snap_always(v));
 }
 
 void Workspace2D::set_zoom(float z) {
@@ -239,6 +575,20 @@ std::vector<std::size_t> Workspace2D::sorted_draw_order() const {
 
 std::uint64_t Workspace2D::alloc_id() {
   return next_id_++;
+}
+
+std::string Workspace2D::strip_copy_suffix(const std::string& name) {
+  // "Crate 3" -> "Crate" so duplicates count up instead of nesting suffixes.
+  const std::size_t sp = name.find_last_of(' ');
+  if (sp == std::string::npos || sp == 0 || sp + 1 >= name.size()) {
+    return name;
+  }
+  for (std::size_t i = sp + 1; i < name.size(); ++i) {
+    if (name[i] < '0' || name[i] > '9') {
+      return name;
+    }
+  }
+  return name.substr(0, sp);
 }
 
 std::string Workspace2D::unique_name(const std::vector<Entity2D>& existing,
