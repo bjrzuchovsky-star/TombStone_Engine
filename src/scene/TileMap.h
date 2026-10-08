@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -59,13 +60,53 @@ struct SpriteData {
 };
 
 // Built-in frontier palette used when a TileMap has no tileset image.
+// `solid` is the default collision flag (walls, water, cactus block riders;
+// dirt, sand and grass do not).
 struct BuiltinTile {
   const char* name;
   float rgba[4];
+  bool solid;
 };
 inline constexpr int kBuiltinTileCount = 16;
 // id in [1, kBuiltinTileCount]; other ids wrap so stale ids still draw.
 const BuiltinTile& builtin_tile(int id);
+// The id builtin_tile() actually shows for `id` (1..kBuiltinTileCount).
+int builtin_tile_index(int id);
+
+// Fast per-tileset lookup built from TileSolidity (see below).
+class SolidTable {
+ public:
+  bool operator()(int tile_id) const;
+  bool any() const;
+
+ private:
+  friend struct TileSolidity;
+  bool builtin_ = true;     // ids wrap like builtin_tile()
+  std::vector<char> flags_;  // index = tile id
+};
+
+// Which tile ids block movement, per tileset (scene.json v4
+// "tile_solidity"). Keyed by the TileMap's tileset path; "" is the built-in
+// palette. A tileset listed in `overrides` uses exactly that solid set;
+// an unlisted one uses its defaults: the built-in palette's flags, or
+// nothing solid for an image tileset.
+struct TileSolidity {
+  std::map<std::string, std::vector<int>> overrides;  // sorted, unique ids
+
+  bool solid(const std::string& tileset, int tile_id) const;
+  // Effective solid ids (sorted). Built-in ids are 1..kBuiltinTileCount.
+  std::vector<int> solid_ids(const std::string& tileset) const;
+  // True when the flag actually changed. An override that ends up equal to
+  // the defaults is dropped, so files only carry real changes.
+  bool set_solid(const std::string& tileset, int tile_id, bool solid);
+  SolidTable table(const std::string& tileset) const;
+  // Sort / dedupe ids, drop non-positive ids and default-equal overrides.
+  void normalize();
+
+  static std::vector<int> default_solid_ids(const std::string& tileset);
+
+  bool operator==(const TileSolidity& o) const = default;
+};
 
 // Tileset slicing shared by the editor and the runtime: tiles are cut
 // left-to-right, top-to-bottom in tile_size squares. Count is 0 when the

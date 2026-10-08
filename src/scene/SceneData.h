@@ -52,6 +52,24 @@ struct SpawnPointData {
   bool operator==(const SpawnPointData& o) const = default;
 };
 
+// Axis-aligned collision box (scene.json v4 "collider"), relative to the
+// entity's top-left corner. Solid colliders block; triggers only report
+// overlaps. Static bodies never move; dynamic ones (players, pushable
+// things) are moved and separated by the runtime.
+struct ColliderData {
+  static constexpr float kMinSize = 1.0f;
+  static constexpr float kMaxSize = 16384.0f;
+
+  float offset_x = 0.0f;
+  float offset_y = 0.0f;
+  float w = 32.0f;
+  float h = 32.0f;
+  bool trigger = false;  // false = solid
+  bool dynamic = false;  // false = static
+
+  bool operator==(const ColliderData& o) const = default;
+};
+
 // One entity in a flat scene under the conceptual root. Transform is the
 // x/y/w/h rect (y grows down); everything else is an optional component.
 struct Entity2D {
@@ -71,6 +89,8 @@ struct Entity2D {
   std::optional<PlayerControllerData> player;
   std::optional<Camera2DData> camera;
   std::optional<SpawnPointData> spawn;
+  // Collision (scene.json v4).
+  std::optional<ColliderData> collider;
 
   float center_x() const { return x + w * 0.5f; }
   float center_y() const { return y + h * 0.5f; }
@@ -84,6 +104,10 @@ inline bool operator!=(const Entity2D& a, const Entity2D& b) {
 
 // Keep w/h equal to the TileMap grid extent (no-op without a tilemap).
 void sync_tilemap_extent(Entity2D& e);
+
+// A collider covering the whole entity rect: dynamic for players, static
+// otherwise. What "Add Collider" and the v3 -> v4 upgrade hand out.
+ColliderData default_collider(const Entity2D& e);
 
 // Clamp component fields to their valid ranges (slots, speed, zoom...).
 void normalize_components(Entity2D& e);

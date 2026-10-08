@@ -1,6 +1,7 @@
 #include "scene/SceneData.h"
 
 #include <algorithm>
+#include <cmath>
 #include <numeric>
 
 namespace ts {
@@ -12,7 +13,8 @@ bool operator==(const Entity2D& a, const Entity2D& b) {
          a.color[1] == b.color[1] && a.color[2] == b.color[2] &&
          a.color[3] == b.color[3] && a.layer == b.layer &&
          a.tilemap == b.tilemap && a.sprite == b.sprite &&
-         a.player == b.player && a.camera == b.camera && a.spawn == b.spawn;
+         a.player == b.player && a.camera == b.camera && a.spawn == b.spawn &&
+         a.collider == b.collider;
 }
 
 void sync_tilemap_extent(Entity2D& e) {
@@ -22,6 +24,14 @@ void sync_tilemap_extent(Entity2D& e) {
   e.tilemap->normalize();
   e.w = static_cast<float>(e.tilemap->cols * e.tilemap->tile_size);
   e.h = static_cast<float>(e.tilemap->rows * e.tilemap->tile_size);
+}
+
+ColliderData default_collider(const Entity2D& e) {
+  ColliderData c;
+  c.w = std::clamp(e.w, ColliderData::kMinSize, ColliderData::kMaxSize);
+  c.h = std::clamp(e.h, ColliderData::kMinSize, ColliderData::kMaxSize);
+  c.dynamic = e.player.has_value();
+  return c;
 }
 
 void normalize_components(Entity2D& e) {
@@ -48,6 +58,20 @@ void normalize_components(Entity2D& e) {
   }
   if (e.spawn) {
     e.spawn->slot = std::clamp(e.spawn->slot, 0, kMaxPlayers - 1);
+  }
+  if (e.collider) {
+    ColliderData& c = *e.collider;
+    auto finite_or = [](float v, float fallback) {
+      return std::isfinite(v) ? v : fallback;
+    };
+    c.offset_x = std::clamp(finite_or(c.offset_x, 0.0f),
+                            -ColliderData::kMaxSize, ColliderData::kMaxSize);
+    c.offset_y = std::clamp(finite_or(c.offset_y, 0.0f),
+                            -ColliderData::kMaxSize, ColliderData::kMaxSize);
+    c.w = std::clamp(finite_or(c.w, ColliderData::kMinSize),
+                     ColliderData::kMinSize, ColliderData::kMaxSize);
+    c.h = std::clamp(finite_or(c.h, ColliderData::kMinSize),
+                     ColliderData::kMinSize, ColliderData::kMaxSize);
   }
 }
 
