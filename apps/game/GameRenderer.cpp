@@ -1,0 +1,110 @@
+#include "GameRenderer.h"
+
+#if defined(__APPLE__)
+#define GL_SILENCE_DEPRECATION
+#endif
+// GLFW pulls the platform OpenGL header portably (Windows needs its
+// APIENTRY / WINGDIAPI first; GLFW handles that).
+#include <GLFW/glfw3.h>
+
+#include <utility>
+
+namespace ts {
+namespace tombstone {
+namespace game {
+
+namespace {
+
+// Dusk over the badlands: the clear colour outside the scene.
+constexpr float kClear[4] = {0.075f, 0.067f, 0.063f, 1.0f};
+
+void solid_quad(float x0, float y0, float x1, float y1) {
+  glBegin(GL_QUADS);
+  glVertex2f(x0, y0);
+  glVertex2f(x1, y0);
+  glVertex2f(x1, y1);
+  glVertex2f(x0, y1);
+  glEnd();
+}
+
+// Missing sprite image: solid stand-in plus a red cross so it reads as a
+// problem, not as art.
+void missing_cross(float x0, float y0, float x1, float y1) {
+  glColor4f(0.86f, 0.24f, 0.18f, 1.0f);
+  glBegin(GL_LINES);
+  glVertex2f(x0, y0);
+  glVertex2f(x1, y1);
+  glVertex2f(x1, y0);
+  glVertex2f(x0, y1);
+  glEnd();
+}
+
+}  // namespace
+
+GameRenderer::GameRenderer(std::string project_dir)
+    : project_dir_(std::move(project_dir)) {}
+
+const gfx::TextureInfo& GameRenderer::texture(const std::string& rel_path) {
+  return textures_.get(runtime::resolve_asset(project_dir_, rel_path));
+}
+
+bool GameRenderer::image_size(const std::string& rel_path, int* width,
+                              int* height) {
+  const gfx::TextureInfo& t = texture(rel_path);
+  if (!t.ok) {
+    return false;
+  }
+  *width = t.width;
+  *height = t.height;
+  return true;
+}
+
+void GameRenderer::render(const runtime::WorldRect& view, int framebuffer_w,
+                          int framebuffer_h,
+                          const std::vector<runtime::DrawQuad>& quads) {
+  glViewport(0, 0, framebuffer_w, framebuffer_h);
+  glClearColor(kClear[0], kClear[1], kClear[2], kClear[3]);
+  glClear(GL_COLOR_BUFFER_BIT);
+
+  // World space straight onto the framebuffer, y down like the editor.
+  glMatrixMode(GL_PROJECTION);
+  glLoadIdentity();
+  glOrtho(view.x0, view.x1, view.y1, view.y0, -1.0, 1.0);
+  glMatrixMode(GL_MODELVIEW);
+  glLoadIdentity();
+
+  glDisable(GL_DEPTH_TEST);
+  glDisable(GL_CULL_FACE);
+  glEnable(GL_BLEND);
+  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+  for (const runtime::DrawQuad& q : quads) {
+    const std::uint64_t handle = q.image ? texture(*q.image).handle : 0;
+    glColor4f(q.rgba[0], q.rgba[1], q.rgba[2], q.rgba[3]);
+    if (handle != 0) {
+      glEnable(GL_TEXTURE_2D);
+      glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(handle));
+      glBegin(GL_QUADS);
+      glTexCoord2f(q.u0, q.v0);
+      glVertex2f(q.x0, q.y0);
+      glTexCoord2f(q.u1, q.v0);
+      glVertex2f(q.x1, q.y0);
+      glTexCoord2f(q.u1, q.v1);
+      glVertex2f(q.x1, q.y1);
+      glTexCoord2f(q.u0, q.v1);
+      glVertex2f(q.x0, q.y1);
+      glEnd();
+      glBindTexture(GL_TEXTURE_2D, 0);
+      glDisable(GL_TEXTURE_2D);
+    } else {
+      solid_quad(q.x0, q.y0, q.x1, q.y1);
+      if (q.missing) {
+        missing_cross(q.x0, q.y0, q.x1, q.y1);
+      }
+    }
+  }
+}
+
+}  // namespace game
+}  // namespace tombstone
+}  // namespace ts
